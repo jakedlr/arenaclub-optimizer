@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from importlib.metadata import version
@@ -313,7 +314,7 @@ def test_default_cache_dir_uses_xdg_cache_home(monkeypatch, tmp_path):
     assert default_cache_dir() == tmp_path / "xdg" / "arenaclub-optimizer" / "cards"
 
 
-@pytest.mark.parametrize("value", [None, ""])
+@pytest.mark.parametrize("value", [None, "", "relative/cache", "./cache"])
 def test_default_cache_dir_falls_back_to_home_cache(monkeypatch, tmp_path, value):
     if value is None:
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
@@ -322,6 +323,44 @@ def test_default_cache_dir_falls_back_to_home_cache(monkeypatch, tmp_path, value
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert default_cache_dir() == tmp_path / ".cache" / "arenaclub-optimizer" / "cards"
+
+
+def test_cache_write_does_not_use_a_fixed_temp_file_name(tmp_path):
+    # Another writer's temp file at the old fixed name must not get in the way.
+    cache = tmp_path / "cards"
+    (cache / f"{CARD_A}.json.tmp").mkdir(parents=True)
+    with make_client(tmp_path, Recorder()) as client:
+        client.get_card(CARD_A)
+
+    assert json.loads((cache / f"{CARD_A}.json").read_text()) == fixture(
+        "v4_item_a.json"
+    )
+    leftovers = {p.name for p in cache.iterdir()} - {
+        f"{CARD_A}.json",
+        f"{CARD_A}.json.tmp",
+    }
+    assert leftovers == set()
+
+
+def test_failed_cache_write_still_returns_the_card_and_warns(tmp_path, caplog):
+    not_a_dir = tmp_path / "cards"
+    not_a_dir.write_text("a file where the cache dir should be")
+    recorder = Recorder()
+    clock = FakeClock()
+    with (
+        caplog.at_level(logging.WARNING, logger="arenaclub_optimizer.arena_client"),
+        ArenaClient(
+            transport=httpx.MockTransport(recorder),
+            cache_dir=not_a_dir,
+            clock=clock,
+            sleep=clock.sleep,
+        ) as client,
+    ):
+        card = client.get_card(CARD_A)
+
+    assert card == fixture("v4_item_a.json")
+    assert len(recorder.requests) == 1
+    assert any(CARD_A in r.getMessage() for r in caplog.records)
 
 
 def test_client_uses_default_cache_dir_when_none_given(monkeypatch, tmp_path):
@@ -366,9 +405,12 @@ def test_block_without_retry_after_has_none(tmp_path, status):
     assert excinfo.value.retry_after is None
 
 
-def test_unparseable_retry_after_is_none(tmp_path):
+@pytest.mark.parametrize(
+    "value", ["soon", "nan", "inf", "-inf", "1e3", "-5", "+5", "1.5", ""]
+)
+def test_unparseable_retry_after_is_none(tmp_path, value):
     def handler(request):
-        return httpx.Response(429, headers={"Retry-After": "soon"})
+        return httpx.Response(429, headers={"Retry-After": value})
 
     with make_client(tmp_path, handler) as client:
         with pytest.raises(ArenaBlockedError) as excinfo:
