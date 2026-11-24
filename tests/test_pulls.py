@@ -166,3 +166,10 @@ def test_proceeds_are_buyback_rate_times_k_times_market_value_per_pull():
         0.85 * 1.3 * 60,
         0.85 * 1.3 * 100,
     ]
+
+
+@pytest.mark.parametrize("evaluate", [evaluate_ev, evaluate_risk])
+def test_a_price_whose_cost_rounds_to_zero_is_a_value_error(evaluate):
+    # $0.001 rounds to a Cost of $0.00; nothing should divide by it.
+    with pytest.raises(ValueError):
+        evaluate(pack(card("a", 1.0, 10), price=0.001), WALLET)

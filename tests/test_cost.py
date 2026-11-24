@@ -72,3 +72,27 @@ def test_payment_method_string_is_coerced():
 def test_unknown_payment_method_rejected():
     with pytest.raises(ValueError):
         CostModel(payment_method="bitcoin")
+
+
+@pytest.mark.parametrize(
+    ("price", "slab_safe"),
+    [
+        (0.001, False),  # rounds to a Cost of 0.00
+        (0.004, False),
+        (0.004, True),  # 0.0044 with Slab Safe still rounds to 0.00
+    ],
+)
+def test_cost_that_rounds_to_zero_is_rejected(price, slab_safe):
+    # A tiny positive price would otherwise give a Cost of 0.0, and every EV %
+    # and risk ratio divides by Cost.
+    with pytest.raises(ValueError, match="Cost"):
+        CostModel().cost(price, slab_safe=slab_safe)
+
+
+def test_smallest_price_with_a_cent_of_cost_is_allowed():
+    assert CostModel().cost(0.006) == 0.01
+
+
+def test_tiny_price_with_a_card_fee_is_not_zero():
+    # 0.001 x 1.029 + 0.30 = 0.301029 -> 0.30, so the fixed fee keeps it positive.
+    assert CostModel(payment_method=PaymentMethod.card).cost(0.001) == 0.30
