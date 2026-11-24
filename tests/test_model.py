@@ -4,6 +4,7 @@ import random
 
 import pytest
 
+from arenaclub_optimizer import model
 from arenaclub_optimizer.model import (
     ChecklistCard,
     NormalizationStatus,
@@ -194,6 +195,17 @@ def test_normalised_hit_rates_always_sum_to_exactly_one(seed):
     assert all(c.hit_rate > 0 for c in result.cards)
 
 
+def test_raises_if_exact_sum_correction_does_not_converge(monkeypatch):
+    # Ten rates of 0.1 plus 0.001 scale to a float sum of 0.9999999999999999, so
+    # they need at least one correction step; allowing none forces the
+    # non-convergence path.
+    cards = cards_with_rates(*[0.1] * 10, 0.001)
+    monkeypatch.setattr(model, "_MAX_CORRECTION_STEPS", 0)
+
+    with pytest.raises(RuntimeError):
+        normalize_hit_rates(cards)
+
+
 def test_accepts_any_iterable_of_cards():
     result = normalize_hit_rates(iter(cards_with_rates(0.5, 0.5)))
 
@@ -242,7 +254,21 @@ def test_percent_to_probability_examples(text, expected):
 
 @pytest.mark.parametrize(
     "text",
-    ["", "   ", "abc", "1.96.1", "1,96", "%", "-1", "100.01", "nan", "inf", "1e2"],
+    [
+        "",
+        "   ",
+        "abc",
+        "1.96.1",
+        "1,96",
+        "%",
+        "-1",
+        "100.01",
+        "nan",
+        "inf",
+        "1e2",
+        "١.٩٦",  # Arabic-Indic digits for "1.96"
+        "１.９６",  # full-width digits for "1.96"
+    ],
 )
 def test_percent_to_probability_rejects_malformed_input(text):
     with pytest.raises(ValueError):
