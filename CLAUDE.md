@@ -25,3 +25,8 @@ Run Playwright headless by default. Use a visible (headed) browser only when the
 - `docs/plan.md`: the agreed decisions and the sprint backlog. Read it before starting any work.
 - `GLOSSARY.md`: domain vocabulary. Use these terms in code, issues and PRs.
 - `docs/adr/`: architecture decisions. `docs/research/`: Arena Club API and price-source findings.
+
+## Tooling notes
+- `gh issue view`, `gh pr view` and `gh pr edit` error on a deprecated "Projects (classic)" field. Use `--json ...`, or `gh api` for edits.
+- uv is at `~/.local/bin/uv`.
+- `main` is protected: CI `test` must pass, admins included. Every change goes through a PR.
