@@ -105,27 +105,21 @@ def evaluate_risk(
     p_profit = _probability_at_least(outcomes, cost)
     median_ratio = _weighted_median(outcomes) / cost
     top_heaviness = _top_heaviness(outcomes)
-    low_p_profit = p_profit < p_profit_threshold
-    top_heavy = top_heaviness > top_heaviness_threshold
-    high_variance = low_p_profit or top_heavy
 
-    note = None
-    if high_variance:
-        note = _note(
-            p_profit if low_p_profit else None,
-            top_heaviness if top_heavy else None,
-            median_ratio,
-            p_profit_threshold,
-            top_heaviness_threshold,
-        )
+    # One clause per High-variance condition that fired.
+    fired = []
+    if p_profit < p_profit_threshold:
+        fired.append(_p_profit_clause(p_profit, p_profit_threshold))
+    if top_heaviness > top_heaviness_threshold:
+        fired.append(_top_heaviness_clause(top_heaviness, top_heaviness_threshold))
 
     return RiskResult(
         p_profit=p_profit,
         std_ratio=_weighted_std(outcomes) / cost,
         median_ratio=median_ratio,
         top_heaviness=top_heaviness,
-        high_variance=high_variance,
-        note=note,
+        high_variance=bool(fired),
+        note=_note(fired, median_ratio) if fired else None,
         cost=cost,
         outcomes=outcomes,
     )
@@ -201,28 +195,22 @@ def _expected_proceeds(outcomes: tuple[PullOutcome, ...]) -> float:
     return math.fsum(outcome.probability * outcome.proceeds for outcome in outcomes)
 
 
-def _note(
-    p_profit: float | None,
-    top_heaviness: float | None,
-    median_ratio: float,
-    p_profit_threshold: float,
-    top_heaviness_threshold: float,
-) -> str:
-    """The High-variance Note. Pass a metric only when its condition fired."""
-    clauses = []
-    if p_profit is not None:
-        if p_profit == 0:
-            clauses.append("no pull returns at least your cost")
-        else:
-            shown = _percent(p_profit, p_profit_threshold)
-            clauses.append(f"only {shown} of pulls return at least your cost")
-    if top_heaviness is not None:
-        shown = _percent(top_heaviness, top_heaviness_threshold)
-        clauses.append(
-            f"{shown} of expected value comes from the rarest "
-            f"{RAREST_MASS:.0%} of pulls"
-        )
-    clauses.append(f"a typical pull returns {median_ratio:.2f}× your cost")
+def _p_profit_clause(p_profit: float, threshold: float) -> str:
+    if p_profit == 0:
+        return "no pull returns at least your cost"
+    return f"only {_percent(p_profit, threshold)} of pulls return at least your cost"
+
+
+def _top_heaviness_clause(top_heaviness: float, threshold: float) -> str:
+    return (
+        f"{_percent(top_heaviness, threshold)} of expected value comes from "
+        f"the rarest {RAREST_MASS:.0%} of pulls"
+    )
+
+
+def _note(fired: list[str], median_ratio: float) -> str:
+    """The High-variance Note: the conditions that fired, then the median."""
+    clauses = [*fired, f"a typical pull returns {median_ratio:.2f}× your cost"]
     text = "; ".join(clauses) + "."
     return text[0].upper() + text[1:]
 
