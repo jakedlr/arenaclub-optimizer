@@ -12,8 +12,9 @@ from arenaclub_optimizer._pulls import (
     DEFAULT_K,
     HitRateRejectedError,
     check_k_and_buyback_rate,
-    market_value_or_zero,
+    expected_proceeds,
     normalise_checklist,
+    pulls,
 )
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.model import (
@@ -87,10 +88,10 @@ def evaluate_ev(
     cards = normalization.cards
 
     cost = cost_model.cost(pack.price)
-    buyback_per_dollar = buyback_rate * k
+    outcomes = pulls(cards, k, buyback_rate)
 
-    market_proceeds = math.fsum(c.hit_rate * market_value_or_zero(c) for c in cards)
-    buyback_proceeds = buyback_per_dollar * market_proceeds
+    market_proceeds = math.fsum(p.hit_rate * p.market_value for p in outcomes)
+    buyback_proceeds = expected_proceeds(outcomes)
     market_ev = market_proceeds - cost
     buyback_ev = buyback_proceeds - cost
 
@@ -98,8 +99,7 @@ def evaluate_ev(
     if pack.insurance_available:
         floor = slab_safe_floor * pack.price
         slab_safe_proceeds = math.fsum(
-            c.hit_rate * max(floor, buyback_per_dollar * market_value_or_zero(c))
-            for c in cards
+            p.hit_rate * max(floor, p.proceeds) for p in outcomes
         )
         slab_safe_ev = slab_safe_proceeds - cost_model.cost(pack.price, slab_safe=True)
 

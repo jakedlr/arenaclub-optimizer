@@ -1,11 +1,14 @@
 """Pull arithmetic shared by `ev` and `risk`.
 
 Pure arithmetic: no I/O. Vocabulary follows GLOSSARY.md. Both modules take their
-defaults, parameter checks and Hit Rate normalisation from here, so they accept
-the same inputs and reject the same Checklists with the same error.
+defaults, parameter checks, Hit Rate normalisation and per-Pull Buyback proceeds
+from here, so they accept the same inputs, reject the same Checklists with the
+same error, and Buyback EV is built from exactly the proceeds risk works with.
 """
 
 import math
+from collections.abc import Iterable
+from typing import NamedTuple
 
 from arenaclub_optimizer.model import (
     ChecklistCard,
@@ -17,6 +20,19 @@ from arenaclub_optimizer.model import (
 
 DEFAULT_K = 1.0
 DEFAULT_BUYBACK_RATE = 0.9
+
+
+class Pull(NamedTuple):
+    """One possible Pull of a Rip.
+
+    `hit_rate` is the normalised Hit Rate, `market_value` is $0 when the card
+    has none, and `proceeds` is its Buyback proceeds, buyback_rate x k x
+    `market_value`.
+    """
+
+    hit_rate: float
+    market_value: float
+    proceeds: float
 
 
 class HitRateRejectedError(ValueError):
@@ -48,6 +64,18 @@ def normalise_checklist(pack: SlabPack) -> NormalizationResult:
     return normalization
 
 
-def market_value_or_zero(card: ChecklistCard) -> float:
-    """A card's Market Value, or $0 when it has none."""
-    return 0.0 if card.market_value is None else card.market_value
+def pulls(
+    cards: Iterable[ChecklistCard], k: float, buyback_rate: float
+) -> tuple[Pull, ...]:
+    """Each card's Pull, in Checklist order. Pass normalised cards."""
+    return tuple(_pull(card, k, buyback_rate) for card in cards)
+
+
+def expected_proceeds(outcomes: Iterable[Pull]) -> float:
+    """Expected Buyback proceeds of one Rip: the sum of hit_rate x proceeds."""
+    return math.fsum(pull.hit_rate * pull.proceeds for pull in outcomes)
+
+
+def _pull(card: ChecklistCard, k: float, buyback_rate: float) -> Pull:
+    value = 0.0 if card.market_value is None else card.market_value
+    return Pull(card.hit_rate, value, buyback_rate * k * value)

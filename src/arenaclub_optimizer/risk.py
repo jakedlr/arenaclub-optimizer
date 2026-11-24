@@ -9,15 +9,17 @@ import math
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from arenaclub_optimizer._pulls import DEFAULT_BUYBACK_RATE, DEFAULT_K
-from arenaclub_optimizer.cost import CostModel
-from arenaclub_optimizer.model import (
-    FLOAT_TOLERANCE,
-    ChecklistCard,
-    NormalizationStatus,
-    SlabPack,
-    normalize_hit_rates,
+from arenaclub_optimizer._pulls import (
+    DEFAULT_BUYBACK_RATE,
+    DEFAULT_K,
+    HitRateRejectedError,
+    check_k_and_buyback_rate,
+    expected_proceeds,
+    normalise_checklist,
+    pulls,
 )
+from arenaclub_optimizer.cost import CostModel
+from arenaclub_optimizer.model import FLOAT_TOLERANCE, SlabPack
 
 __all__ = [
     "DEFAULT_BUYBACK_RATE",
@@ -25,6 +27,7 @@ __all__ = [
     "DEFAULT_P_PROFIT_THRESHOLD",
     "DEFAULT_TOP_HEAVINESS_THRESHOLD",
     "RAREST_MASS",
+    "HitRateRejectedError",
     "PullOutcome",
     "RiskResult",
     "evaluate_risk",
@@ -94,30 +97,20 @@ def evaluate_risk(
     (without Slab Safe). A Slab Pack is high-variance when P(profit) is below
     `p_profit_threshold` or Top-heaviness is above `top_heaviness_threshold`.
 
-    Raises ValueError if the Checklist can't be normalised, or if `k` or
-    `buyback_rate` is out of range.
+    Raises HitRateRejectedError (a ValueError) if normalisation rejects the
+    Checklist, and ValueError if `k` or `buyback_rate` is out of range.
     """
-    if not (math.isfinite(k) and k >= 0):
-        raise ValueError(f"k must be finite and >= 0, got {k!r}")
-    if not (math.isfinite(buyback_rate) and 0 <= buyback_rate <= 1):
-        raise ValueError(f"buyback_rate must be in [0, 1], got {buyback_rate!r}")
-
-    normalised = normalize_hit_rates(pack.checklist)
-    if normalised.status is NormalizationStatus.REJECT:
-        raise ValueError(
-            f"Slab Pack {pack.pack_id!r} Hit Rates sum to {normalised.raw_sum}, "
-            f"too far from 1 to use"
-        )
+    check_k_and_buyback_rate(k, buyback_rate)
+    normalization = normalise_checklist(pack)
 
     cost = cost_model.cost(pack.price)
-    outcomes = tuple(
-        PullOutcome(card.hit_rate, _buyback_proceeds(card, k, buyback_rate))
-        for card in normalised.cards
-    )
+    pack_pulls = pulls(normalization.cards, k, buyback_rate)
+    outcomes = tuple(PullOutcome(pull.hit_rate, pull.proceeds) for pull in pack_pulls)
+    mean = expected_proceeds(pack_pulls)
 
     p_profit = _probability_at_least(outcomes, cost)
     median_ratio = _weighted_median(outcomes) / cost
-    top_heaviness = _top_heaviness(outcomes)
+    top_heaviness = _top_heaviness(outcomes, mean)
 
     # One clause per High-variance condition that fired.
     fired = []
@@ -128,7 +121,7 @@ def evaluate_risk(
 
     return RiskResult(
         p_profit=p_profit,
-        std_ratio=_weighted_std(outcomes) / cost,
+        std_ratio=_weighted_std(outcomes, mean) / cost,
         median_ratio=median_ratio,
         top_heaviness=top_heaviness,
         high_variance=bool(fired),
@@ -136,13 +129,6 @@ def evaluate_risk(
         cost=cost,
         outcomes=outcomes,
     )
-
-
-def _buyback_proceeds(card: ChecklistCard, k: float, buyback_rate: float) -> float:
-    """A Pull's Buyback proceeds: buyback_rate x k x Market Value, or 0."""
-    if card.market_value is None:
-        return 0.0
-    return buyback_rate * k * card.market_value
 
 
 def _probability_at_least(outcomes: tuple[PullOutcome, ...], threshold: float) -> float:
@@ -156,9 +142,9 @@ def _probability_at_least(outcomes: tuple[PullOutcome, ...], threshold: float) -
     return min(total, 1.0)
 
 
-def _weighted_std(outcomes: tuple[PullOutcome, ...]) -> float:
-    """Probability-weighted (population) standard deviation of proceeds."""
-    mean = _expected_proceeds(outcomes)
+def _weighted_std(outcomes: tuple[PullOutcome, ...], mean: float) -> float:
+    """Probability-weighted (population) standard deviation of proceeds about
+    `mean`, the expected proceeds."""
     variance = math.fsum(
         outcome.probability * (outcome.proceeds - mean) ** 2 for outcome in outcomes
     )
@@ -180,14 +166,14 @@ def _weighted_median(outcomes: tuple[PullOutcome, ...]) -> float:
     return ordered[-1].proceeds
 
 
-def _top_heaviness(outcomes: tuple[PullOutcome, ...]) -> float:
-    """Share of expected proceeds from the rarest `RAREST_MASS` of probability.
+def _top_heaviness(outcomes: tuple[PullOutcome, ...], total: float) -> float:
+    """Share of `total` expected proceeds from the rarest `RAREST_MASS` of
+    probability.
 
     Pulls are taken rarest first, ties broken by higher proceeds first, and the
     Pull that crosses the boundary contributes only the part of its probability
     that fits. Returns 0 when expected proceeds are 0.
     """
-    total = _expected_proceeds(outcomes)
     if total == 0:
         return 0.0
     ordered = sorted(
@@ -202,10 +188,6 @@ def _top_heaviness(outcomes: tuple[PullOutcome, ...]) -> float:
         top.append(taken * outcome.proceeds)
         remaining -= taken
     return math.fsum(top) / total
-
-
-def _expected_proceeds(outcomes: tuple[PullOutcome, ...]) -> float:
-    return math.fsum(outcome.probability * outcome.proceeds for outcome in outcomes)
 
 
 def _p_profit_clause(p_profit: float, threshold: float) -> str:
