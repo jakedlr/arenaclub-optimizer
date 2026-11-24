@@ -29,12 +29,19 @@ class CostModel:
             raise ValueError(f"tax_rate must be in [0, 1), got {self.tax_rate}")
 
     def cost(self, price: float, slab_safe: bool = False) -> float:
-        """Return the Cost of one Rip at list `price`, rounded to cents."""
+        """Return the Cost of one Rip at list `price`, rounded to cents.
+
+        Raises ValueError if `price` isn't finite and > 0, or if the Cost
+        rounds to $0.00, since EV % and the risk ratios divide by it.
+        """
         if not (math.isfinite(price) and price > 0):
             raise ValueError(f"price must be finite and > 0, got {price}")
         base = price * (1 + SLAB_SAFE_RATE) if slab_safe else price
         subtotal = base + base * self.tax_rate
-        return round(subtotal + self._fee(subtotal), 2)
+        cost = round(subtotal + self._fee(subtotal), 2)
+        if cost <= 0:
+            raise ValueError(f"Cost must be > 0, but price {price} rounds to {cost}")
+        return cost
 
     def _fee(self, amount: float) -> float:
         match self.payment_method:

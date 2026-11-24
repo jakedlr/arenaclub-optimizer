@@ -248,6 +248,33 @@ def test_top_heaviness_breaks_hit_rate_ties_by_higher_proceeds_first():
     assert result.top_heaviness == pytest.approx(0.4399, abs=1e-4)
 
 
+def test_normalisation_residue_does_not_break_a_hit_rate_tie():
+    # A uniform Checklist: 7 cards at 0.996/7 each (raw sum 0.996, drift 0.004,
+    # ok), so each normalises to 1/7. MVs 100..700 give proceeds 90..630.
+    # Normalisation puts its float residue on one card, which can leave it an
+    # ulp rarer than the rest; that must not stop the tie going to the higher
+    # proceeds.
+    #   Total = (90 + 180 + ... + 630) / 7 = 2520 / 7 = 360
+    #   Rarest 1%: all 0.01 from the 630 card (1/7 > 0.01): 0.01 x 630 = 6.3
+    #   Top-heaviness = 6.3 / 360 = 0.0175
+    # (Ordering the residue card first gives 0.01 x 90 / 360 = 0.0025.)
+    cards = [card(str(mv), 0.996 / 7, mv) for mv in range(100, 800, 100)]
+
+    result = evaluate_risk(pack(100, *cards), WALLET)
+
+    assert result.top_heaviness == pytest.approx(0.0175)
+
+
+def test_a_real_near_miss_is_not_profit():
+    # 0.9 x 111.1 = 99.99 against a Cost of 100: a cent short, which is a
+    # relative miss of 1e-4, far outside the float tolerance.
+    result = evaluate_risk(pack(100, card("a", 0.5, 111.1), card("b", 0.5, 10)), WALLET)
+
+    assert result.outcomes[0].proceeds == pytest.approx(99.99)
+    assert result.p_profit == 0.0
+    assert result.p_at_least(1.0) == 0.0
+
+
 # --- median -----------------------------------------------------------------
 
 

@@ -7,39 +7,40 @@ Value counts as $0, so every EV figure is a lower bound when any value is missin
 import math
 from dataclasses import dataclass
 
+from arenaclub_optimizer._pulls import (
+    DEFAULT_BUYBACK_RATE,
+    DEFAULT_K,
+    HitRateRejectedError,
+    check_k_and_buyback_rate,
+    expected_proceeds,
+    normalise_checklist,
+    pulls,
+)
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.model import (
+    FLOAT_TOLERANCE,
     ChecklistCard,
-    NormalizationResult,
     NormalizationStatus,
     SlabPack,
     TierType,
-    normalize_hit_rates,
 )
 
-DEFAULT_K = 1.0
-DEFAULT_BUYBACK_RATE = 0.9
+__all__ = [
+    "DEFAULT_BUYBACK_RATE",
+    "DEFAULT_COVERAGE_THRESHOLD",
+    "DEFAULT_K",
+    "DEFAULT_SLAB_SAFE_FLOOR",
+    "TOP_TIER_TYPES",
+    "EVResult",
+    "HitRateRejectedError",
+    "evaluate_ev",
+]
+
 DEFAULT_SLAB_SAFE_FLOOR = 0.8
 DEFAULT_COVERAGE_THRESHOLD = 0.95
 
 # Tier types whose missing values are called out in `missing_top_tiers`.
 TOP_TIER_TYPES = frozenset({TierType.GRAIL, TierType.CHASE})
-
-# Float noise allowed when comparing Value Coverage with its threshold, so that
-# normalised Hit Rates adding up to e.g. 0.9499999999999998 still count as 95%.
-_COVERAGE_TOLERANCE = 1e-9
-
-
-class HitRateRejectedError(ValueError):
-    """A Slab Pack's Hit Rates are too far from summing to 1 to be used."""
-
-    def __init__(self, pack_id: str, normalization: NormalizationResult) -> None:
-        super().__init__(
-            f"Slab Pack {pack_id!r}: Hit Rates sum to {normalization.raw_sum:.6f}, "
-            f"drift {normalization.drift:.6f} is too large to normalise"
-        )
-        self.pack_id = pack_id
-        self.normalization = normalization
 
 
 @dataclass(frozen=True)
@@ -80,18 +81,17 @@ def evaluate_ev(
     Raises HitRateRejectedError if normalisation rejects the Checklist, and
     ValueError for an out-of-range parameter.
     """
-    _check_parameters(k, buyback_rate, slab_safe_floor, coverage_threshold)
+    check_k_and_buyback_rate(k, buyback_rate)
+    _check_parameters(slab_safe_floor, coverage_threshold)
 
-    normalization = normalize_hit_rates(pack.checklist)
-    if normalization.status is NormalizationStatus.REJECT:
-        raise HitRateRejectedError(pack.pack_id, normalization)
+    normalization = normalise_checklist(pack)
     cards = normalization.cards
 
     cost = cost_model.cost(pack.price)
-    buyback_per_dollar = buyback_rate * k
+    outcomes = pulls(cards, k, buyback_rate)
 
-    market_proceeds = math.fsum(c.hit_rate * _value(c) for c in cards)
-    buyback_proceeds = buyback_per_dollar * market_proceeds
+    market_proceeds = math.fsum(p.hit_rate * p.market_value for p in outcomes)
+    buyback_proceeds = expected_proceeds(outcomes)
     market_ev = market_proceeds - cost
     buyback_ev = buyback_proceeds - cost
 
@@ -99,7 +99,7 @@ def evaluate_ev(
     if pack.insurance_available:
         floor = slab_safe_floor * pack.price
         slab_safe_proceeds = math.fsum(
-            c.hit_rate * max(floor, buyback_per_dollar * _value(c)) for c in cards
+            p.hit_rate * max(floor, p.proceeds) for p in outcomes
         )
         slab_safe_ev = slab_safe_proceeds - cost_model.cost(pack.price, slab_safe=True)
 
@@ -114,16 +114,13 @@ def evaluate_ev(
         buyback_ev_pct=buyback_ev / cost,
         slab_safe_ev=slab_safe_ev,
         value_coverage=value_coverage,
-        rankable=value_coverage >= coverage_threshold - _COVERAGE_TOLERANCE,
+        # FLOAT_TOLERANCE lets normalised Hit Rates adding up to e.g.
+        # 0.9499999999999998 still count as 95%.
+        rankable=value_coverage >= coverage_threshold - FLOAT_TOLERANCE,
         lower_bound=bool(unvalued),
         missing_top_tiers=_missing_top_tiers(unvalued),
         normalization_status=normalization.status,
     )
-
-
-def _value(card: ChecklistCard) -> float:
-    """A card's Market Value, or $0 when it has none."""
-    return 0.0 if card.market_value is None else card.market_value
 
 
 def _missing_top_tiers(unvalued: list[ChecklistCard]) -> tuple[str, ...]:
@@ -132,13 +129,7 @@ def _missing_top_tiers(unvalued: list[ChecklistCard]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def _check_parameters(
-    k: float, buyback_rate: float, slab_safe_floor: float, coverage_threshold: float
-) -> None:
-    if not (math.isfinite(k) and k > 0):
-        raise ValueError(f"k must be finite and > 0, got {k}")
-    if not 0 < buyback_rate <= 1:
-        raise ValueError(f"buyback_rate must be in (0, 1], got {buyback_rate}")
+def _check_parameters(slab_safe_floor: float, coverage_threshold: float) -> None:
     if not 0 <= slab_safe_floor <= 1:
         raise ValueError(f"slab_safe_floor must be in [0, 1], got {slab_safe_floor}")
     if not 0 <= coverage_threshold <= 1:

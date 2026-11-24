@@ -64,6 +64,17 @@ def test_checklist_card_allows_missing_market_value_and_confidence():
     assert card.value_confidence is None
 
 
+@pytest.mark.parametrize("market_value", [0.0, 0.01, 1500.0])
+def test_checklist_card_allows_zero_or_positive_market_value(market_value):
+    assert make_card("a", 0.5, market_value=market_value).market_value == market_value
+
+
+@pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf, -0.01, -100.0])
+def test_checklist_card_rejects_invalid_market_value(bad_value):
+    with pytest.raises(ValueError, match="Market Value"):
+        make_card("a", 0.5, market_value=bad_value)
+
+
 def test_slab_pack_is_immutable_and_holds_a_tuple_checklist():
     pack = SlabPack(
         pack_id="pack-1",

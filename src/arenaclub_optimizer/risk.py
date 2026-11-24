@@ -9,25 +9,41 @@ import math
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from arenaclub_optimizer.cost import CostModel
-from arenaclub_optimizer.model import (
-    ChecklistCard,
-    NormalizationStatus,
-    SlabPack,
-    normalize_hit_rates,
+from arenaclub_optimizer._pulls import (
+    DEFAULT_BUYBACK_RATE,
+    DEFAULT_K,
+    HitRateRejectedError,
+    check_k_and_buyback_rate,
+    expected_proceeds,
+    normalise_checklist,
+    pulls,
 )
+from arenaclub_optimizer.cost import CostModel
+from arenaclub_optimizer.model import FLOAT_TOLERANCE, SlabPack
 
-DEFAULT_BUYBACK_RATE = 0.9
+__all__ = [
+    "DEFAULT_BUYBACK_RATE",
+    "DEFAULT_K",
+    "DEFAULT_P_PROFIT_THRESHOLD",
+    "DEFAULT_TOP_HEAVINESS_THRESHOLD",
+    "RAREST_MASS",
+    "HitRateRejectedError",
+    "PullOutcome",
+    "RiskResult",
+    "evaluate_risk",
+]
+
 DEFAULT_P_PROFIT_THRESHOLD = 0.25
 DEFAULT_TOP_HEAVINESS_THRESHOLD = 0.5
 
 # Top-heaviness looks at the rarest 1% of probability mass.
 RAREST_MASS = 0.01
 
-# Float noise allowed at a boundary, so that proceeds such as 0.9 x 0.95 x 14
-# (11.969999999999999 in floats) meet a Cost of 11.97, and a cumulative
-# probability of 0.1 summed five times counts as reaching 0.5.
-_TOLERANCE = 1e-9
+# Boundary comparisons allow FLOAT_TOLERANCE of float noise, so that proceeds
+# such as 0.9 x 0.95 x 14 (11.969999999999999 in floats) meet a Cost of 11.97,
+# and a cumulative probability of 0.03 + 0.29 + 0.18 (0.49999999999999994 in
+# floats) counts as reaching 0.5. A real near-miss, such as $99.99 against a
+# Cost of $100, still falls short.
 
 # Most decimal places a note uses for a percentage.
 _MAX_PERCENT_DECIMALS = 4
@@ -70,7 +86,7 @@ class RiskResult:
 def evaluate_risk(
     pack: SlabPack,
     cost_model: CostModel,
-    k: float = 1.0,
+    k: float = DEFAULT_K,
     buyback_rate: float = DEFAULT_BUYBACK_RATE,
     p_profit_threshold: float = DEFAULT_P_PROFIT_THRESHOLD,
     top_heaviness_threshold: float = DEFAULT_TOP_HEAVINESS_THRESHOLD,
@@ -81,30 +97,21 @@ def evaluate_risk(
     (without Slab Safe). A Slab Pack is high-variance when P(profit) is below
     `p_profit_threshold` or Top-heaviness is above `top_heaviness_threshold`.
 
-    Raises ValueError if the Checklist can't be normalised, or if `k` or
-    `buyback_rate` is out of range.
+    Raises HitRateRejectedError (a ValueError) if normalisation rejects the
+    Checklist, and ValueError if `k` or `buyback_rate` is out of range.
     """
-    if not (math.isfinite(k) and k >= 0):
-        raise ValueError(f"k must be finite and >= 0, got {k!r}")
-    if not (math.isfinite(buyback_rate) and 0 <= buyback_rate <= 1):
-        raise ValueError(f"buyback_rate must be in [0, 1], got {buyback_rate!r}")
-
-    normalised = normalize_hit_rates(pack.checklist)
-    if normalised.status is NormalizationStatus.REJECT:
-        raise ValueError(
-            f"Slab Pack {pack.pack_id!r} Hit Rates sum to {normalised.raw_sum}, "
-            f"too far from 1 to use"
-        )
+    check_k_and_buyback_rate(k, buyback_rate)
+    normalization = normalise_checklist(pack)
 
     cost = cost_model.cost(pack.price)
-    outcomes = tuple(
-        PullOutcome(card.hit_rate, _buyback_proceeds(card, k, buyback_rate))
-        for card in normalised.cards
-    )
+    pack_pulls = pulls(normalization.cards, k, buyback_rate)
+    outcomes = tuple(PullOutcome(pull.hit_rate, pull.proceeds) for pull in pack_pulls)
+    mean = expected_proceeds(pack_pulls)
 
     p_profit = _probability_at_least(outcomes, cost)
     median_ratio = _weighted_median(outcomes) / cost
-    top_heaviness = _top_heaviness(outcomes)
+    raw_rates = tuple(card.hit_rate for card in pack.checklist)
+    top_heaviness = _top_heaviness(outcomes, raw_rates, mean)
 
     # One clause per High-variance condition that fired.
     fired = []
@@ -115,7 +122,7 @@ def evaluate_risk(
 
     return RiskResult(
         p_profit=p_profit,
-        std_ratio=_weighted_std(outcomes) / cost,
+        std_ratio=_weighted_std(outcomes, mean) / cost,
         median_ratio=median_ratio,
         top_heaviness=top_heaviness,
         high_variance=bool(fired),
@@ -125,27 +132,20 @@ def evaluate_risk(
     )
 
 
-def _buyback_proceeds(card: ChecklistCard, k: float, buyback_rate: float) -> float:
-    """A Pull's Buyback proceeds: buyback_rate x k x Market Value, or 0."""
-    if card.market_value is None:
-        return 0.0
-    return buyback_rate * k * card.market_value
-
-
 def _probability_at_least(outcomes: tuple[PullOutcome, ...], threshold: float) -> float:
     """P(proceeds >= threshold), counting a near-tie as meeting it."""
     total = math.fsum(
         outcome.probability
         for outcome in outcomes
         if outcome.proceeds >= threshold
-        or math.isclose(outcome.proceeds, threshold, rel_tol=_TOLERANCE)
+        or math.isclose(outcome.proceeds, threshold, rel_tol=FLOAT_TOLERANCE)
     )
     return min(total, 1.0)
 
 
-def _weighted_std(outcomes: tuple[PullOutcome, ...]) -> float:
-    """Probability-weighted (population) standard deviation of proceeds."""
-    mean = _expected_proceeds(outcomes)
+def _weighted_std(outcomes: tuple[PullOutcome, ...], mean: float) -> float:
+    """Probability-weighted (population) standard deviation of proceeds about
+    `mean`, the expected proceeds."""
     variance = math.fsum(
         outcome.probability * (outcome.proceeds - mean) ** 2 for outcome in outcomes
     )
@@ -162,37 +162,43 @@ def _weighted_median(outcomes: tuple[PullOutcome, ...]) -> float:
     cumulative = 0.0
     for outcome in ordered:
         cumulative += outcome.probability
-        if cumulative >= 0.5 - _TOLERANCE:
+        if cumulative >= 0.5 - FLOAT_TOLERANCE:
             return outcome.proceeds
     return ordered[-1].proceeds
 
 
-def _top_heaviness(outcomes: tuple[PullOutcome, ...]) -> float:
-    """Share of expected proceeds from the rarest `RAREST_MASS` of probability.
+def _top_heaviness(
+    outcomes: tuple[PullOutcome, ...], raw_rates: tuple[float, ...], total: float
+) -> float:
+    """Share of `total` expected proceeds from the rarest `RAREST_MASS` of
+    probability.
 
     Pulls are taken rarest first, ties broken by higher proceeds first, and the
     Pull that crosses the boundary contributes only the part of its probability
     that fits. Returns 0 when expected proceeds are 0.
+
+    Rarity is judged on `raw_rates`, the Hit Rates before normalisation, in the
+    same order as `outcomes`. Normalisation puts its float residue on one card,
+    which could otherwise make that card an ulp rarer than the cards it ties
+    with and so skip the tie rule. Dividing by the raw sum never reverses the
+    order of two rates, so rarest first by raw rate is rarest first after
+    normalisation too.
     """
-    total = _expected_proceeds(outcomes)
     if total == 0:
         return 0.0
     ordered = sorted(
-        outcomes, key=lambda outcome: (outcome.probability, -outcome.proceeds)
+        zip(raw_rates, outcomes, strict=True),
+        key=lambda pair: (pair[0], -pair[1].proceeds),
     )
     remaining = RAREST_MASS
     top = []
-    for outcome in ordered:
+    for _, outcome in ordered:
         if remaining <= 0:
             break
         taken = min(outcome.probability, remaining)
         top.append(taken * outcome.proceeds)
         remaining -= taken
     return math.fsum(top) / total
-
-
-def _expected_proceeds(outcomes: tuple[PullOutcome, ...]) -> float:
-    return math.fsum(outcome.probability * outcome.proceeds for outcome in outcomes)
 
 
 def _p_profit_clause(p_profit: float, threshold: float) -> str:
