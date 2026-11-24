@@ -14,9 +14,10 @@ from enum import StrEnum
 DEFAULT_WARN_DRIFT = 0.005
 DEFAULT_REJECT_DRIFT = 0.05
 
-# Float noise allowed when comparing drift with a threshold, so that a raw sum
-# such as 0.5 + 0.505 counts as a drift of exactly 0.005.
-_DRIFT_TOLERANCE = 1e-9
+# Float noise allowed at a boundary comparison. Shared by model, ev and risk. In
+# this module it lets a raw sum such as 0.5 + 0.505 count as a drift of exactly
+# 0.005.
+FLOAT_TOLERANCE = 1e-9
 
 # Steps allowed for nudging normalised Hit Rates to an exact sum of 1. In
 # practice one or two are enough.
@@ -139,9 +140,9 @@ def normalize_hit_rates(
 def _status_for(
     drift: float, warn_drift: float, reject_drift: float
 ) -> NormalizationStatus:
-    if drift <= warn_drift + _DRIFT_TOLERANCE:
+    if drift <= warn_drift + FLOAT_TOLERANCE:
         return NormalizationStatus.OK
-    if drift <= reject_drift + _DRIFT_TOLERANCE:
+    if drift <= reject_drift + FLOAT_TOLERANCE:
         return NormalizationStatus.WARN
     return NormalizationStatus.REJECT
 

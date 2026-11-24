@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.model import (
+    FLOAT_TOLERANCE,
     ChecklistCard,
     NormalizationStatus,
     SlabPack,
@@ -24,10 +25,11 @@ DEFAULT_TOP_HEAVINESS_THRESHOLD = 0.5
 # Top-heaviness looks at the rarest 1% of probability mass.
 RAREST_MASS = 0.01
 
-# Float noise allowed at a boundary, so that proceeds such as 0.9 x 0.95 x 14
-# (11.969999999999999 in floats) meet a Cost of 11.97, and a cumulative
-# probability of 0.1 summed five times counts as reaching 0.5.
-_TOLERANCE = 1e-9
+# Boundary comparisons allow FLOAT_TOLERANCE of float noise, so that proceeds
+# such as 0.9 x 0.95 x 14 (11.969999999999999 in floats) meet a Cost of 11.97,
+# and a cumulative probability of 0.03 + 0.29 + 0.18 (0.49999999999999994 in
+# floats) counts as reaching 0.5. A real near-miss, such as $99.99 against a
+# Cost of $100, still falls short.
 
 # Most decimal places a note uses for a percentage.
 _MAX_PERCENT_DECIMALS = 4
@@ -138,7 +140,7 @@ def _probability_at_least(outcomes: tuple[PullOutcome, ...], threshold: float) -
         outcome.probability
         for outcome in outcomes
         if outcome.proceeds >= threshold
-        or math.isclose(outcome.proceeds, threshold, rel_tol=_TOLERANCE)
+        or math.isclose(outcome.proceeds, threshold, rel_tol=FLOAT_TOLERANCE)
     )
     return min(total, 1.0)
 
@@ -162,7 +164,7 @@ def _weighted_median(outcomes: tuple[PullOutcome, ...]) -> float:
     cumulative = 0.0
     for outcome in ordered:
         cumulative += outcome.probability
-        if cumulative >= 0.5 - _TOLERANCE:
+        if cumulative >= 0.5 - FLOAT_TOLERANCE:
             return outcome.proceeds
     return ordered[-1].proceeds
 

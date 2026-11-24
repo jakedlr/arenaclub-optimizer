@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.model import (
+    FLOAT_TOLERANCE,
     ChecklistCard,
     NormalizationResult,
     NormalizationStatus,
@@ -24,10 +25,6 @@ DEFAULT_COVERAGE_THRESHOLD = 0.95
 
 # Tier types whose missing values are called out in `missing_top_tiers`.
 TOP_TIER_TYPES = frozenset({TierType.GRAIL, TierType.CHASE})
-
-# Float noise allowed when comparing Value Coverage with its threshold, so that
-# normalised Hit Rates adding up to e.g. 0.9499999999999998 still count as 95%.
-_COVERAGE_TOLERANCE = 1e-9
 
 
 class HitRateRejectedError(ValueError):
@@ -114,7 +111,9 @@ def evaluate_ev(
         buyback_ev_pct=buyback_ev / cost,
         slab_safe_ev=slab_safe_ev,
         value_coverage=value_coverage,
-        rankable=value_coverage >= coverage_threshold - _COVERAGE_TOLERANCE,
+        # FLOAT_TOLERANCE lets normalised Hit Rates adding up to e.g.
+        # 0.9499999999999998 still count as 95%.
+        rankable=value_coverage >= coverage_threshold - FLOAT_TOLERANCE,
         lower_bound=bool(unvalued),
         missing_top_tiers=_missing_top_tiers(unvalued),
         normalization_status=normalization.status,
