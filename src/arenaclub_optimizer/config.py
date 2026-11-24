@@ -160,10 +160,10 @@ def load_overrides(
         entry = reader.table(data, key)
         prefix = f"{key}."
         reader.reject_unknown(entry, Override, prefix)
-        if "market_value" not in entry:
-            raise reader.error(f"{prefix}market_value", "is required")
         override = Override(
-            market_value=reader.number(entry, "market_value", 0.0, low=0.0, at=prefix),
+            market_value=reader.required_number(
+                entry, "market_value", low=0.0, at=prefix
+            ),
             note=reader.optional_str(entry, "note", at=prefix),
         )
         target = by_card_id if key.startswith(CARD_ID_PREFIX) else by_cert
@@ -272,6 +272,14 @@ class _Reader:
             data, key, low=low, high=high, high_open=high_open, at=at
         )
         return default if value is None else value
+
+    def required_number(
+        self, data: dict[str, Any], key: str, *, low: float, at: str = ""
+    ) -> float:
+        value = self.optional_number(data, key, low=low, at=at)
+        if value is None:
+            raise self.error(f"{at}{key}", "is required")
+        return value
 
     def optional_number(
         self,
