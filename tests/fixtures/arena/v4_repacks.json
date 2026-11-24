@@ -1,0 +1,580 @@
+{
+ "items": [
+  {
+   "id": "28a08752-4c78-474a-8d31-8690e724e491",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 10000,
+   "position": 1,
+   "repackSeriesIds": [
+    "f261fbdf-db21-4ee8-8828-396d4c507b89",
+    "e554b19c-2188-4d00-8f39-d0a7769d27b4"
+   ]
+  },
+  {
+   "id": "d91222f5-e657-4f5b-8f42-9596747e5553",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 3000,
+   "position": 1,
+   "repackSeriesIds": [
+    "8be1c776-af77-4b0b-9156-f63f111ee3aa",
+    "d562fe0e-b786-43b1-b4e7-03484f96b3e9"
+   ]
+  },
+  {
+   "id": "59ebce60-7298-41f1-ad4a-2adbd18efa04",
+   "name": "Multi-Style",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 7500,
+   "position": 1,
+   "repackSeriesIds": [
+    "7d1ea265-1373-4cf3-8b2d-2793bde42404"
+   ]
+  },
+  {
+   "id": "2972d30e-c017-45af-a7da-7d1f8c61e430",
+   "name": "Midnight",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 5000,
+   "position": 1,
+   "repackSeriesIds": [
+    "98b7a38c-bb8b-4a51-a95e-3b2272f4199f",
+    "69757085-db5e-4365-85b4-dffac8ec0208",
+    "915f51f1-9f6b-44d0-b419-7e9c5695e4bc"
+   ]
+  },
+  {
+   "id": "299745e5-ab9b-4480-93a3-e03a22572598",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 30000,
+   "position": 1,
+   "repackSeriesIds": [
+    "6e7ffc7e-a14e-4da5-8261-dc6fee154efe"
+   ]
+  },
+  {
+   "id": "491626fb-4359-43d0-8eb6-385ae930c249",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 7000,
+   "position": 1,
+   "repackSeriesIds": [
+    "81d05d64-3b09-42ee-a125-88ba56a730fd",
+    "e04efc7a-452b-4632-85e3-0008b320ac53"
+   ]
+  },
+  {
+   "id": "5d0c77cd-15f0-40bf-a492-f1b408c257fc",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 7500,
+   "position": 1,
+   "repackSeriesIds": [
+    "ca2b6b72-08c3-4aad-a6da-90373970276b"
+   ]
+  },
+  {
+   "id": "4b0f6b06-16dc-46ae-a2e8-5864b71a1c82",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 15000,
+   "position": 1,
+   "repackSeriesIds": [
+    "ed12381d-081d-4562-9d60-f224ec3bebc5"
+   ]
+  },
+  {
+   "id": "ff9c036a-ac02-4f1b-837b-3bbb1d6819b9",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 5000,
+   "position": 1,
+   "repackSeriesIds": [
+    "e470eb60-bdc3-411a-bb2f-645ae0f51b81"
+   ]
+  },
+  {
+   "id": "7cfedfb3-7540-41ec-a434-e17d1c071c5b",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 5000,
+   "position": 1,
+   "repackSeriesIds": [
+    "446b2adb-59f2-48bb-8839-d88fe6bec183"
+   ]
+  },
+  {
+   "id": "22a489b4-df63-4e50-aefd-0a5a03a1beba",
+   "name": "Horizon",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 10000,
+   "position": 2,
+   "repackSeriesIds": [
+    "7b736f86-274d-4aaa-b8d8-496dfc710aa2",
+    "1baf1e8a-113f-4d76-9ef8-b28de5f4c603",
+    "398a9179-591e-4d68-8430-611b30ef74ac"
+   ]
+  },
+  {
+   "id": "146d972b-ca62-4ca5-a4ea-20e29d6fa8e8",
+   "name": "Dusk",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 25000,
+   "position": 3,
+   "repackSeriesIds": [
+    "9cc72db4-7da5-4cbe-892f-a0e64f6f6769",
+    "177ca4e1-dbcf-46a8-9f4d-817d25540985",
+    "8fcfc37e-dabc-41ff-8c8a-17e81ba9df4d",
+    "6758cabe-f229-4dc0-a324-414d98771bc5",
+    "a5ee4afe-ee87-4a8b-820c-b53a53289e5a"
+   ]
+  },
+  {
+   "id": "2cc5fe9d-12a6-4d72-a844-2304512c7d0e",
+   "name": "Dawn",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 50000,
+   "position": 4,
+   "repackSeriesIds": [
+    "1049b369-d5c9-447e-82a7-c16788121e51",
+    "5795f7a1-1dd3-4a9e-bb8e-51ab4fb75da8",
+    "fe72f689-49a5-4a01-b9ac-da6e55f3c6c4"
+   ]
+  },
+  {
+   "id": "c0536391-573e-4d4d-8d5d-5765c0aaf322",
+   "name": "Twilight",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 100000,
+   "position": 5,
+   "repackSeriesIds": [
+    "27cb2867-37a0-407b-8fc8-28b4a7d943ad",
+    "ed4d3c3c-5eeb-45ea-8730-fefdfdf5acb1",
+    "5d7468eb-39d1-44b6-aec0-4a5a6b8ccb2c"
+   ]
+  },
+  {
+   "id": "15f03fd3-f91c-4da8-9bc2-79ff1124b582",
+   "name": "Daybreak",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 250000,
+   "position": 6,
+   "repackSeriesIds": [
+    "fc4b1294-fba3-450c-a421-35d5eb0931cd",
+    "40d135aa-7a71-4a2d-a06c-d8a9700f514f",
+    "a893bdc3-a1e6-41aa-8f72-5ebdb67524b4",
+    "75cc37bb-4f23-4026-af96-8b23e3e0d97d"
+   ]
+  },
+  {
+   "id": "bc6a6e68-88a5-4390-ba6b-b1a273c7401a",
+   "name": "Eclipse",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 500000,
+   "position": 7,
+   "repackSeriesIds": [
+    "642cbd76-4324-43f8-a003-816d6b55f088",
+    "13d0053b-87ba-43b8-9809-fb0c69fc2f0e",
+    "140fc6cd-f372-4166-9bcf-311ce3d1acd8",
+    "28a46389-5983-472e-ba7e-abddb4b3f831"
+   ]
+  },
+  {
+   "id": "6b7b3855-0b86-4c67-9184-5b9a653d6a30",
+   "name": "Solstice",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 1000000,
+   "position": 8,
+   "repackSeriesIds": [
+    "82e700a1-9366-4e86-bf35-bf76f072276f",
+    "12160284-04e2-4fff-9b34-069220e86b2b",
+    "f7d61918-f7a3-4b85-afb7-410ab7e72c39",
+    "5f128a0e-fb5b-4051-ba2a-ed10be64c6a0"
+   ]
+  },
+  {
+   "id": "36da5f83-d7f7-4f19-a9b7-1ed8672a6b48",
+   "name": "Series One",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 600000,
+   "position": 8,
+   "repackSeriesIds": [
+    "ed1a42a7-aafb-4903-8a3a-da9cfe853d7d"
+   ]
+  },
+  {
+   "id": "ca3bf959-d7b1-4cc0-8e6b-344aba867621",
+   "name": "Series One",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 750000,
+   "position": 9,
+   "repackSeriesIds": [
+    "8ee08b13-9d04-42d8-9ebd-083e00ba61e2"
+   ]
+  },
+  {
+   "id": "f89821a1-7594-439a-a8bd-25211c52c286",
+   "name": "Series One",
+   "numItems": 1,
+   "category": "watch",
+   "priceCents": 800000,
+   "position": 10,
+   "repackSeriesIds": [
+    "de7356ad-7cbb-4337-b9ba-c0acf6b0e7f4"
+   ]
+  },
+  {
+   "id": "90cbae7e-902e-4c71-9f6a-1450f16c9fec",
+   "name": "Holy Grail",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 1000000,
+   "position": 300,
+   "repackSeriesIds": [
+    "e2258b91-b472-47a1-bb18-5f2a06cd5e2c"
+   ]
+  },
+  {
+   "id": "3dcf7a5e-7ddd-446e-991b-2e94d41a3359",
+   "name": "Crown Jewel",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 500000,
+   "position": 400,
+   "repackSeriesIds": [
+    "e1e69f35-e4e6-4ffa-8d4d-19b7cbce9871",
+    "826e9afe-816e-4e04-86b1-7e6a1fb9ed69",
+    "81c8658b-22ae-4d3e-8300-4513baaffd87",
+    "204419dd-fe99-4312-b2b5-0e8037bb0d53"
+   ]
+  },
+  {
+   "id": "99efa5f0-d4cf-4094-8fa9-b2d6e53aa3b3",
+   "name": "Legendary",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 250000,
+   "position": 500,
+   "repackSeriesIds": [
+    "8302ab5a-01ad-4391-be06-676dff59d879",
+    "2b1ac855-79ee-42d2-85f9-57629e9f2415",
+    "41ad1256-77fd-4ffa-beba-a092dd2a1bc9",
+    "9b92b009-6026-48af-9c3f-74a78c9fd450",
+    "2a3d1a2a-2f07-4761-b754-50a89ea0ffd6"
+   ]
+  },
+  {
+   "id": "96fa1fd3-32c3-4af4-8e99-b9e90e766ad5",
+   "name": "Superior",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 50000,
+   "position": 750,
+   "repackSeriesIds": [
+    "3eecec67-f3cc-4360-8788-3246e2c18d1e"
+   ]
+  },
+  {
+   "id": "cc2c5a99-4d56-471a-8f27-9b8b6d11f5eb",
+   "name": "Reserve",
+   "numItems": 1,
+   "category": "wine",
+   "priceCents": 100000,
+   "position": 1000,
+   "repackSeriesIds": [
+    "d16b1b9a-dd41-4ac9-8ab6-e2f0cc3169c5",
+    "96e5f76f-7dd8-4b62-817c-5c89201e0dbb",
+    "e417a0df-a61f-4913-9792-a7a48a0c0745"
+   ]
+  },
+  {
+   "id": "0697354b-aaa5-4d70-997a-487bd23ebd77",
+   "name": "Elite",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 100000,
+   "position": 1000,
+   "repackSeriesIds": [
+    "c3fab3be-49b9-4e9b-98ac-5ec682d017f1",
+    "028b1121-9cd2-4e66-a6b4-a7c375f7a480"
+   ]
+  },
+  {
+   "id": "4da0f7c2-be8b-4817-a76b-5f7f551a1c0c",
+   "name": "Diamond",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 100000,
+   "position": 1000,
+   "repackSeriesIds": [
+    "04e81bb2-5185-4f2e-ab16-8e9914b2ac4c",
+    "b54b0ead-4b91-4490-83a4-3e1c393c983d",
+    "9135d3b0-88af-4ca6-94ea-1f80e7fa91e8",
+    "277703b9-0681-471c-bb23-f13e9a66ee5b",
+    "cee6e1c0-3f5b-4407-a91b-ed58528cd669",
+    "810d8019-8d45-4b4e-b585-a8c00bed8ac6",
+    "8aeabeef-fc26-48e1-b4c1-1cb4661be6f6"
+   ]
+  },
+  {
+   "id": "87d31f39-730f-4f44-8042-f6597d6dba80",
+   "name": "Signature",
+   "numItems": 1,
+   "category": "wine",
+   "priceCents": 50000,
+   "position": 2000,
+   "repackSeriesIds": [
+    "a02f3837-eb7f-48fe-bf28-4c2ab6697bab",
+    "14292b7d-911d-41b9-b0d3-3d3f82904a4e",
+    "230a804b-37a8-4dff-8197-d9b2e1070635"
+   ]
+  },
+  {
+   "id": "74553cd8-c326-4ce6-b316-3a65a86cfd58",
+   "name": "Estate",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 25000,
+   "position": 2000,
+   "repackSeriesIds": [
+    "da081e06-99d1-4fd4-9f99-5d26983afe35",
+    "73f0c6c8-af19-4ecc-a8dd-80460634b943",
+    "d241feaa-6e52-41bc-aef7-42e43814646d"
+   ]
+  },
+  {
+   "id": "125d2cff-4395-4722-bf5e-39aab33d83e8",
+   "name": "Emerald",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 50000,
+   "position": 2000,
+   "repackSeriesIds": [
+    "21d794e4-ed1e-4a9b-8758-899de0e53eaa",
+    "c5f7a920-790c-4396-b0e2-1c8aa7050f9f",
+    "9cd737fa-34c6-494e-8f73-c13431236cf8",
+    "cad71867-be75-49b3-ad34-9abc1325a743",
+    "56b8eb61-af77-45f6-a465-03d18acba3c9",
+    "f27abc59-8b81-4f5a-a4f5-1090532e5998",
+    "4e4e010d-d212-42de-99dd-0ed0184a497e",
+    "5aab2297-daea-4303-bce3-17b250092c99"
+   ]
+  },
+  {
+   "id": "3bdf60a9-9526-4ff2-9bc6-c734c6011e79",
+   "name": "Select",
+   "numItems": 1,
+   "category": "wine",
+   "priceCents": 25000,
+   "position": 3000,
+   "repackSeriesIds": [
+    "2aa33802-30f6-4ad0-bf35-204242018bc3",
+    "2237d685-be23-4aca-9cac-135ca64f94ee",
+    "cf938b73-e501-4a9b-8583-da593cbe5997"
+   ]
+  },
+  {
+   "id": "416e6138-7772-47ac-b665-40c1181ccef9",
+   "name": "Archive",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 10000,
+   "position": 3000,
+   "repackSeriesIds": [
+    "bb46452a-e82f-4a44-b0a7-940e0f750e06",
+    "51a9f4fe-5800-470f-8f95-81091fe91f1d",
+    "30c43ab4-3414-4146-8199-37ebd4096a6b"
+   ]
+  },
+  {
+   "id": "b7780554-d6a0-4cfd-8f7f-2d3b3d30134f",
+   "name": "Ruby",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 25000,
+   "position": 3000,
+   "repackSeriesIds": [
+    "775a4e3c-7142-46e1-ac09-03094ab54bcb",
+    "c688501b-835e-4ca5-bf81-540e234d8e90",
+    "0d63f805-4832-4f2d-8b84-6e8661c6c1b9",
+    "197f94b9-4f13-41ba-bd82-7013b1afa572",
+    "ecab256f-1db0-4476-b01b-d174d981b7f7",
+    "bd3d9323-7e02-4661-95e4-5e07fa18792a",
+    "e63ddc25-9313-4433-9d7d-317723e58ea8",
+    "7330948c-9900-413b-9fb9-b5cd67608b7d",
+    "d43e6245-4ca2-4991-a27e-27e16c54a0e3",
+    "97f4533e-9d34-4e70-a077-a5c85ec811b6"
+   ]
+  },
+  {
+   "id": "d29333e4-642c-40ae-aa4a-69a575c2e729",
+   "name": "Discovery",
+   "numItems": 1,
+   "category": "wine",
+   "priceCents": 10000,
+   "position": 4000,
+   "repackSeriesIds": [
+    "842a49fb-0033-453f-b37f-e10dbf04c697",
+    "7f0a83ad-c46e-42e8-850b-930898eb51c7",
+    "d7208069-6592-484c-9482-f49057765c1c"
+   ]
+  },
+  {
+   "id": "efc957bb-06e8-4407-a2dc-ef6b78554d57",
+   "name": "Gold",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 10000,
+   "position": 4000,
+   "repackSeriesIds": [
+    "bd6f445e-f8b6-403d-af71-acef2a85c0a2",
+    "dffa3ffd-73e6-4720-a093-0a6c2780b113",
+    "3e8fa8c8-9023-41de-9052-67dc45bba5fb",
+    "c43ab013-f7d9-4930-b2fd-f06eb8191de3",
+    "5c0cd958-ade4-476f-a597-70d0b4876715",
+    "fa7a7579-ac81-4915-a3fa-18dc35e0857d",
+    "50d3b011-a016-4287-b36e-beb9047466bc",
+    "ee2c2b9f-cb7c-467e-bce7-8cb6adf685af",
+    "c0a8384e-78ab-484d-840f-ddcc6303e3e0"
+   ]
+  },
+  {
+   "id": "4a984d2c-f658-4c7f-a401-26d5c3890408",
+   "name": "Classic",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 5000,
+   "position": 4000,
+   "repackSeriesIds": [
+    "2baa7d03-7472-4a22-9eea-d7d929e1ca64",
+    "d34461cb-0647-4360-adaf-724f2210fb3d",
+    "52b4e63c-9e70-45cc-9a38-37ad07647403"
+   ]
+  },
+  {
+   "id": "2cf9aeb9-1061-44de-b026-247026cd952a",
+   "name": "Seasonal",
+   "numItems": 1,
+   "category": "wine",
+   "priceCents": 10000,
+   "position": 5000,
+   "repackSeriesIds": [
+    "458adcad-aca1-4d67-be20-89eb42dee4ad"
+   ]
+  },
+  {
+   "id": "7202c8b7-3f06-4327-8359-865027536ef3",
+   "name": "Silver",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 5000,
+   "position": 5000,
+   "repackSeriesIds": [
+    "b4cc985a-19d9-4a70-a63e-f75be7041d17",
+    "f4ffc460-30ae-403e-9229-b377e88e9d64",
+    "3301718b-d863-4026-b022-6c0b6edcfa92",
+    "51bb9200-bf67-4900-bdd3-705cb18b58fd",
+    "577b21ff-717a-4616-aed9-7500a46d4777",
+    "902c0878-f081-4024-b6c9-3ed406d30bfd",
+    "6902182a-ec88-4833-a914-ba038330dee5",
+    "61e1bac7-6e0e-4f00-af46-19864186fc49",
+    "65bc5131-c856-4746-a189-01bd69d93996"
+   ]
+  },
+  {
+   "id": "cf8fd7e7-8a3f-421a-80a1-92160372b16c",
+   "name": "Entry",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 3900,
+   "position": 6000,
+   "repackSeriesIds": [
+    "6a994c3f-4115-4328-912c-0e02435c84e4"
+   ]
+  },
+  {
+   "id": "934c3eec-e22c-47a9-8896-fc2ddcea28ae",
+   "name": "Bronze",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 2500,
+   "position": 6000,
+   "repackSeriesIds": [
+    "92b2d831-619c-40f8-8c58-2c883449d23a",
+    "dfa38568-a53e-4a2e-b1e9-2d0b38a7476d",
+    "39bd52a7-bdbd-40da-ae4b-7e3443b3de97",
+    "cb14cc57-f20d-47e9-8fde-03467aad2034",
+    "1b546c27-7b37-4e24-a2f1-ad77fd2a1f2f",
+    "9ad0d012-b36c-4e7e-9834-0c7665be4e8e",
+    "d1742012-81a4-4e7a-b2f0-89421088a4d5",
+    "083ea6f1-face-4f63-afca-38d0fed25104",
+    "594b81bf-90b7-45a9-98e3-c85fa974c19a"
+   ]
+  },
+  {
+   "id": "7caed03d-e439-4b35-b272-500c6284db4a",
+   "name": "Starter",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 2500,
+   "position": 6500,
+   "repackSeriesIds": [
+    "db454733-322b-4576-bec5-01fcdfd9905e"
+   ]
+  },
+  {
+   "id": "577941f5-6672-473c-91c5-f61c3f832de2",
+   "name": "Special Series",
+   "numItems": 1,
+   "category": "card",
+   "priceCents": 10000,
+   "position": 7000,
+   "repackSeriesIds": [
+    "04456e36-0ef7-43f6-be5a-23ffd86ef109"
+   ]
+  },
+  {
+   "id": "44b66990-62a4-4563-bc05-e26726d36359",
+   "name": "Gold Reserve",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 200000,
+   "position": 7000,
+   "repackSeriesIds": [
+    "21571f4a-012d-4cf7-aba0-d5d30674df3d"
+   ]
+  },
+  {
+   "id": "3921d331-4e59-46e8-85a7-4be4dfa666b2",
+   "name": "Gold Reserve",
+   "numItems": 1,
+   "category": "coin",
+   "priceCents": 500000,
+   "position": 7100,
+   "repackSeriesIds": [
+    "06ef17f4-bf41-4d39-a522-6a7e13a31400"
+   ]
+  }
+ ]
+}
