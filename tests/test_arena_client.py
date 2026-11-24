@@ -1,4 +1,6 @@
 import json
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from importlib.metadata import version
 from pathlib import Path
 
@@ -455,3 +457,29 @@ def test_timeout_is_configurable(tmp_path):
         client.list_price_levels()
 
     assert recorder.requests[0].extensions["timeout"]["read"] == 3.0
+
+
+def test_http_date_retry_after_is_converted_to_seconds(tmp_path):
+    future = datetime.now(UTC) + timedelta(seconds=300)
+
+    def handler(request):
+        return httpx.Response(429, headers={"Retry-After": format_datetime(future)})
+
+    with make_client(tmp_path, handler) as client:
+        with pytest.raises(ArenaBlockedError) as excinfo:
+            client.list_price_levels()
+
+    assert 290 <= excinfo.value.retry_after <= 300
+
+
+def test_http_date_retry_after_in_the_past_is_zero(tmp_path):
+    def handler(request):
+        return httpx.Response(
+            429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}
+        )
+
+    with make_client(tmp_path, handler) as client:
+        with pytest.raises(ArenaBlockedError) as excinfo:
+            client.list_price_levels()
+
+    assert excinfo.value.retry_after == 0.0

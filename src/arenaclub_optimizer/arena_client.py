@@ -115,7 +115,8 @@ class ArenaClient:
 
         The id keeps its ``card_`` prefix. A cache hit makes no request.
         """
-        path = self._cache_dir / f"{_checked_id(card_id)}.json"
+        card_id = _checked_id(card_id)
+        path = self._cache_dir / f"{card_id}.json"
         cached = _read_cache(path)
         if cached is not None:
             return cached
