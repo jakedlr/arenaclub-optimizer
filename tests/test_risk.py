@@ -283,14 +283,22 @@ def test_median_just_short_of_half_moves_to_the_next_value():
 
 
 def test_median_survives_float_noise_at_the_half():
-    # Ten cards of P 0.1 with proceeds 9, 18, ..., 90 (MV 10, 20, ..., 100).
-    # 0.1 x 5 = 0.5 exactly, so the median is the fifth value, 45 -> 0.45,
-    # even though summing 0.1 five times in floats need not give exactly 0.5.
-    cards = [card(str(i), 0.1, 10 * i) for i in range(1, 11)]
+    # Proceeds 9 (P 0.03), 18 (P 0.29), 27 (P 0.18), 90 (P 0.5). Ascending:
+    #   9 -> 0.03;  18 -> 0.32;  27 -> 0.5 exactly (>= 0.5, stop).
+    # Median 27 -> 0.27. In floats 0.03 + 0.29 + 0.18 is 0.49999999999999994,
+    # which must still count as reaching 0.5 (otherwise the median would be 90).
+    result = evaluate_risk(
+        pack(
+            100,
+            card("d", 0.5, 100),
+            card("a", 0.03, 10),
+            card("b", 0.29, 20),
+            card("c", 0.18, 30),
+        ),
+        WALLET,
+    )
 
-    result = evaluate_risk(pack(100, *cards), WALLET)
-
-    assert result.median_ratio == pytest.approx(0.45)
+    assert result.median_ratio == pytest.approx(0.27)
 
 
 # --- the High-variance Note ---------------------------------------------------
