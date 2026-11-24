@@ -18,7 +18,12 @@ DEFAULT_REJECT_DRIFT = 0.05
 # such as 0.5 + 0.505 counts as a drift of exactly 0.005.
 _DRIFT_TOLERANCE = 1e-9
 
-_PERCENT_PATTERN = re.compile(r"\d+(\.\d+)?%?")
+# Steps allowed for nudging normalised Hit Rates to an exact sum of 1. In
+# practice one or two are enough.
+_MAX_CORRECTION_STEPS = 8
+
+# ASCII digits only: `\d` would also match e.g. Arabic-Indic or full-width digits.
+_PERCENT_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?%?")
 
 
 class TierType(StrEnum):
@@ -141,21 +146,25 @@ def _scale_to_one(rates: list[float], raw_sum: float) -> list[float]:
 
     Dividing alone leaves the floats summing to 1 only approximately. Nudging
     the largest rate makes both the exact sum (`math.fsum`) and the plain
-    left-to-right `sum` come out as 1.0.
+    left-to-right `sum` come out as 1.0. Raises RuntimeError if that doesn't
+    happen within `_MAX_CORRECTION_STEPS` steps.
     """
     scaled = [rate / raw_sum for rate in rates]
     largest = max(range(len(scaled)), key=scaled.__getitem__)
-    for _ in range(8):
+    for _ in range(_MAX_CORRECTION_STEPS + 1):
         exact = math.fsum(scaled)
         naive = sum(scaled)
         if exact == 1.0 and naive == 1.0:
-            break
+            return scaled
         residue = 1.0 - exact
         if residue == 0.0:
             # Exact sum is right but `sum` rounds away from it: step one ulp.
             residue = math.copysign(math.ulp(scaled[largest]), 1.0 - naive)
         scaled[largest] += residue
-    return scaled
+    raise RuntimeError(
+        f"Hit Rates did not normalise to exactly 1 within "
+        f"{_MAX_CORRECTION_STEPS} correction steps"
+    )
 
 
 def percent_to_probability(text: str) -> float:
