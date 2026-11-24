@@ -62,7 +62,11 @@ class ChecklistCard:
 
 @dataclass(frozen=True)
 class SlabPack:
-    """A Slab Pack: one Price Level in one Category. `price` is the list price."""
+    """A Slab Pack: one Price Level in one Category. `price` is the list price.
+
+    `insurance_available` is whether the pack offers Slab Safe (Arena Club's
+    `isInsuranceAvailable`).
+    """
 
     pack_id: str
     price_level: str
@@ -70,6 +74,7 @@ class SlabPack:
     price: float
     active: bool
     checklist: tuple[ChecklistCard, ...]
+    insurance_available: bool = True
 
 
 class NormalizationStatus(StrEnum):
