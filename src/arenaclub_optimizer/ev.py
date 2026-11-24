@@ -116,11 +116,7 @@ def evaluate_ev(
         value_coverage=value_coverage,
         rankable=value_coverage >= coverage_threshold - _COVERAGE_TOLERANCE,
         lower_bound=bool(unvalued),
-        missing_top_tiers=tuple(
-            dict.fromkeys(
-                c.tier_name for c in unvalued if c.tier_type in TOP_TIER_TYPES
-            )
-        ),
+        missing_top_tiers=_missing_top_tiers(unvalued),
         normalization_status=normalization.status,
     )
 
@@ -128,6 +124,12 @@ def evaluate_ev(
 def _value(card: ChecklistCard) -> float:
     """A card's Market Value, or $0 when it has none."""
     return 0.0 if card.market_value is None else card.market_value
+
+
+def _missing_top_tiers(unvalued: list[ChecklistCard]) -> tuple[str, ...]:
+    """Names of Grail- and Chase-type Tiers with an unvalued card, each once."""
+    names = (c.tier_name for c in unvalued if c.tier_type in TOP_TIER_TYPES)
+    return tuple(dict.fromkeys(names))
 
 
 def _check_parameters(
