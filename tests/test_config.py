@@ -200,13 +200,13 @@ def test_interval_of_exactly_five_is_allowed(tmp_path):
     assert load_config(path).watch.interval_minutes == 5
 
 
-def test_zero_k_and_zero_thresholds_are_allowed(tmp_path):
+def test_small_k_and_boundary_thresholds_are_allowed(tmp_path):
     path = write(
         tmp_path / "c.toml",
-        "k = 0\ncoverage_threshold = 0\np_profit_threshold = 1\n",
+        "k = 0.01\ncoverage_threshold = 0\np_profit_threshold = 1\n",
     )
     config = load_config(path)
-    assert config.k == 0.0
+    assert config.k == 0.01
     assert config.coverage_threshold == 0.0
     assert config.p_profit_threshold == 1.0
 
@@ -243,6 +243,9 @@ def test_unknown_keys_raise(tmp_path, text, key):
     ("text", "key"),
     [
         ("k = -0.1\n", "k"),
+        ("k = 0\n", "k"),
+        ("k = 0.0\n", "k"),
+        (f"k = {10**400}\n", "k"),
         ("k = nan\n", "k"),
         ("k = inf\n", "k"),
         ("tax_rate = 1.0\n", "tax_rate"),
@@ -260,6 +263,8 @@ def test_unknown_keys_raise(tmp_path, text, key):
         ("[watch]\ninterval_minutes = 4\n", "watch.interval_minutes"),
         ("[watch]\ninterval_minutes = 4.9\n", "watch.interval_minutes"),
         ('[watch]\nntfy_server = "ntfy.sh"\n', "watch.ntfy_server"),
+        ('[watch]\nntfy_server = "https://"\n', "watch.ntfy_server"),
+        ('[watch]\nntfy_server = "http://"\n', "watch.ntfy_server"),
         ('[watch]\ntopic = ""\n', "watch.topic"),
         ('[watch]\ntopic = "has space"\n', "watch.topic"),
         (f'[watch]\ntopic = "{"a" * 65}"\n', "watch.topic"),
@@ -415,6 +420,8 @@ def assert_overrides_error(path: Path, key: str) -> None:
         ("[1]\nmarket_value = 1\nnote = 5\n", "1.note"),
         ("[1]\nmarket_value = 1\nprice = 5\n", "1.price"),
         ("x = 1\n", "x"),
+        (f"[1]\nmarket_value = {10**400}\n", "1.market_value"),
+        ("[card_]\nmarket_value = 1\n", "card_"),
     ],
 )
 def test_bad_overrides_raise(tmp_path, text, key):
@@ -426,6 +433,18 @@ def test_invalid_overrides_toml_raises_config_error(tmp_path):
     with pytest.raises(ConfigError) as info:
         load_overrides(path)
     assert str(path) in str(info.value)
+
+
+def test_bare_card_prefix_error_says_card_id_is_missing(tmp_path):
+    path = write(tmp_path / "o.toml", "[card_]\nmarket_value = 1\n")
+    with pytest.raises(ConfigError, match="card id"):
+        load_overrides(path)
+
+
+def test_card_id_keys_are_case_sensitive(tmp_path):
+    overrides = load_overrides(write(tmp_path / "o.toml", OVERRIDES_TEXT))
+    assert overrides.lookup("CARD_ABC", None) is None
+    assert overrides.lookup("card_ABC", None) is None
 
 
 def test_override_value_is_float(tmp_path):
