@@ -12,7 +12,7 @@ def test_version_prints_package_version():
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert version("arenaclub-optimizer") in result.output
+    assert result.stdout == version("arenaclub-optimizer") + "\n"
 
 
 @pytest.mark.parametrize("command", ["rank", "watch"])
@@ -20,4 +20,4 @@ def test_stub_command_exits_non_zero_with_not_implemented(command):
     result = runner.invoke(app, [command])
 
     assert result.exit_code != 0
-    assert "not implemented yet" in result.output
+    assert result.stderr == f"arena {command}: not implemented yet\n"
