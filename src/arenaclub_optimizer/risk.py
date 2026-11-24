@@ -110,7 +110,8 @@ def evaluate_risk(
 
     p_profit = _probability_at_least(outcomes, cost)
     median_ratio = _weighted_median(outcomes) / cost
-    top_heaviness = _top_heaviness(outcomes, mean)
+    raw_rates = tuple(card.hit_rate for card in pack.checklist)
+    top_heaviness = _top_heaviness(outcomes, raw_rates, mean)
 
     # One clause per High-variance condition that fired.
     fired = []
@@ -166,22 +167,32 @@ def _weighted_median(outcomes: tuple[PullOutcome, ...]) -> float:
     return ordered[-1].proceeds
 
 
-def _top_heaviness(outcomes: tuple[PullOutcome, ...], total: float) -> float:
+def _top_heaviness(
+    outcomes: tuple[PullOutcome, ...], raw_rates: tuple[float, ...], total: float
+) -> float:
     """Share of `total` expected proceeds from the rarest `RAREST_MASS` of
     probability.
 
     Pulls are taken rarest first, ties broken by higher proceeds first, and the
     Pull that crosses the boundary contributes only the part of its probability
     that fits. Returns 0 when expected proceeds are 0.
+
+    Rarity is judged on `raw_rates`, the Hit Rates before normalisation, in the
+    same order as `outcomes`. Normalisation puts its float residue on one card,
+    which could otherwise make that card an ulp rarer than the cards it ties
+    with and so skip the tie rule. Dividing by the raw sum never reverses the
+    order of two rates, so rarest first by raw rate is rarest first after
+    normalisation too.
     """
     if total == 0:
         return 0.0
     ordered = sorted(
-        outcomes, key=lambda outcome: (outcome.probability, -outcome.proceeds)
+        zip(raw_rates, outcomes, strict=True),
+        key=lambda pair: (pair[0], -pair[1].proceeds),
     )
     remaining = RAREST_MASS
     top = []
-    for outcome in ordered:
+    for _, outcome in ordered:
         if remaining <= 0:
             break
         taken = min(outcome.probability, remaining)
