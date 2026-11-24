@@ -41,3 +41,34 @@ def test_non_positive_price_rejected(price):
 def test_tax_rate_out_of_range_rejected(tax_rate):
     with pytest.raises(ValueError):
         CostModel(tax_rate=tax_rate)
+
+
+@pytest.mark.parametrize(
+    ("price", "method", "slab_safe", "tax_rate", "expected"),
+    [
+        # 110 + 8.80 = 118.80; fee 3.4452 + 0.30 -> 122.5452
+        (100, PaymentMethod.card, True, 0.08, 122.55),
+        (625.00, PaymentMethod.ach, False, 0.0, 630.00),  # fee exactly 5.00
+        (625.01, PaymentMethod.ach, False, 0.0, 630.01),  # 5.00008 capped to 5.00
+        # Slab Safe base 625.009 crosses the cap: 625.009 + 5.00 -> 630.009
+        (568.19, PaymentMethod.ach, True, 0.0, 630.01),
+    ],
+)
+def test_cost_edge_cases(price, method, slab_safe, tax_rate, expected):
+    model = CostModel(payment_method=method, tax_rate=tax_rate)
+    assert model.cost(price, slab_safe=slab_safe) == expected
+
+
+@pytest.mark.parametrize("price", [float("inf"), float("nan")])
+def test_non_finite_price_rejected(price):
+    with pytest.raises(ValueError):
+        CostModel().cost(price)
+
+
+def test_payment_method_string_is_coerced():
+    assert CostModel(payment_method="card").payment_method is PaymentMethod.card
+
+
+def test_unknown_payment_method_rejected():
+    with pytest.raises(ValueError):
+        CostModel(payment_method="bitcoin")
