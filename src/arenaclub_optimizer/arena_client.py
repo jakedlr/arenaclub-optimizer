@@ -8,8 +8,10 @@ or changes headers to get around a block.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import tempfile
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -30,6 +32,9 @@ DEFAULT_TIMEOUT = 15.0
 # Ids are interpolated into URL paths and cache file names, so only allow the
 # characters Arena Club's ids actually use.
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+_DELTA_SECONDS = re.compile(r"[0-9]+")
+
+logger = logging.getLogger(__name__)
 
 
 class ArenaApiError(Exception):
@@ -52,9 +57,13 @@ class ArenaBlockedError(ArenaApiError):
 
 
 def default_cache_dir() -> Path:
-    """``$XDG_CACHE_HOME/arenaclub-optimizer/cards``, else ``~/.cache/...``."""
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "arenaclub-optimizer" / "cards"
+    """``$XDG_CACHE_HOME/arenaclub-optimizer/cards``, else ``~/.cache/...``.
+
+    Per the XDG spec, an unset, empty or relative ``XDG_CACHE_HOME`` is ignored.
+    """
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    base = Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".cache"
+    return base / "arenaclub-optimizer" / "cards"
 
 
 class ArenaClient:
@@ -164,13 +173,13 @@ def _checked_id(value: str) -> str:
 
 
 def _parse_retry_after(value: str | None) -> float | None:
-    """Seconds from a Retry-After header (delta-seconds or HTTP-date)."""
+    """Seconds from a Retry-After header: delta-seconds (digits only, per
+    RFC 9110) or an HTTP-date. Anything else, such as ``nan`` or ``-5``, is None."""
     if value is None:
         return None
-    try:
-        return max(float(value), 0.0)
-    except ValueError:
-        pass
+    value = value.strip()
+    if _DELTA_SECONDS.fullmatch(value):
+        return float(value)
     try:
         when = parsedate_to_datetime(value)
     except TypeError, ValueError:
@@ -189,7 +198,23 @@ def _read_cache(path: Path) -> dict[str, Any] | None:
 
 
 def _write_cache(path: Path, body: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(body), encoding="utf-8")
-    tmp.replace(path)
+    """Write atomically via a uniquely named temp file, so concurrent writers
+    can't collide. A failed write is logged, not raised: the card was fetched."""
+    tmp: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp = Path(f.name)
+            json.dump(body, f)
+        tmp.replace(path)
+    except OSError as exc:
+        logger.warning("could not cache card %s in %s: %s", path.stem, path, exc)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
