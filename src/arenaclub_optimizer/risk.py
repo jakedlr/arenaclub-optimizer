@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from arenaclub_optimizer._pulls import DEFAULT_BUYBACK_RATE, DEFAULT_K
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.model import (
     FLOAT_TOLERANCE,
@@ -18,7 +19,17 @@ from arenaclub_optimizer.model import (
     normalize_hit_rates,
 )
 
-DEFAULT_BUYBACK_RATE = 0.9
+__all__ = [
+    "DEFAULT_BUYBACK_RATE",
+    "DEFAULT_K",
+    "DEFAULT_P_PROFIT_THRESHOLD",
+    "DEFAULT_TOP_HEAVINESS_THRESHOLD",
+    "RAREST_MASS",
+    "PullOutcome",
+    "RiskResult",
+    "evaluate_risk",
+]
+
 DEFAULT_P_PROFIT_THRESHOLD = 0.25
 DEFAULT_TOP_HEAVINESS_THRESHOLD = 0.5
 
@@ -72,7 +83,7 @@ class RiskResult:
 def evaluate_risk(
     pack: SlabPack,
     cost_model: CostModel,
-    k: float = 1.0,
+    k: float = DEFAULT_K,
     buyback_rate: float = DEFAULT_BUYBACK_RATE,
     p_profit_threshold: float = DEFAULT_P_PROFIT_THRESHOLD,
     top_heaviness_threshold: float = DEFAULT_TOP_HEAVINESS_THRESHOLD,
