@@ -1,5 +1,6 @@
 import dataclasses
 import math
+import random
 
 import pytest
 
@@ -172,9 +173,25 @@ def test_realistic_checklist_sums_to_exactly_one():
 
     result = normalize_hit_rates(cards_with_rates(*rates))
 
-    assert result.status is NormalizationStatus.WARN
+    assert result.raw_sum == pytest.approx(1.000602)
+    assert result.status is NormalizationStatus.OK
     assert sum(c.hit_rate for c in result.cards) == 1.0
     assert math.fsum(c.hit_rate for c in result.cards) == 1.0
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_normalised_hit_rates_always_sum_to_exactly_one(seed):
+    rng = random.Random(seed)
+    rates = [rng.uniform(1e-6, 1.0) for _ in range(rng.randint(1, 80))]
+    target = rng.uniform(0.96, 1.04)
+    total = math.fsum(rates)
+    rates = [rate / total * target for rate in rates]
+
+    result = normalize_hit_rates(cards_with_rates(*rates))
+
+    assert sum(c.hit_rate for c in result.cards) == 1.0
+    assert math.fsum(c.hit_rate for c in result.cards) == 1.0
+    assert all(c.hit_rate > 0 for c in result.cards)
 
 
 def test_accepts_any_iterable_of_cards():
