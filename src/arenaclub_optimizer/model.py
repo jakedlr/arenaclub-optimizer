@@ -48,6 +48,8 @@ class ChecklistCard:
 
     `hit_rate` is a probability from 0 to 1, not a percentage. `market_value` is
     in dollars, or None when no Market Value is known.
+
+    Raises ValueError if `market_value` is NaN, infinite or negative.
     """
 
     card_id: str
@@ -59,6 +61,13 @@ class ChecklistCard:
     grade: str
     market_value: float | None
     value_confidence: ValueConfidence | None
+
+    def __post_init__(self) -> None:
+        value = self.market_value
+        if value is not None and not (math.isfinite(value) and value >= 0):
+            raise ValueError(
+                f"card {self.card_id!r} has an invalid Market Value: {value!r}"
+            )
 
 
 @dataclass(frozen=True)
