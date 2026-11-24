@@ -17,4 +17,5 @@
 - **Worked:** building #6 and #7 in parallel, each confined to its own module, gave no merge conflicts. The cost was drift between the two modules (exception types, validation, constants), which needed a refactor story (#12). Next time, put shared building blocks in the first story.
 - **Float tolerance:** boundaries such as 0.5%/5% drift, 95% Value Coverage, P(profit) and the median all needed a single `FLOAT_TOLERANCE` (1e-9). Every boundary test checks that the tolerance is actually needed.
 - **Process:** non-blocking review findings that are cheap to fix are fixed on the same PR before merge, so they don't pile up as debt. `main` moves fast, so PR branches need `update-branch` (strict protection) before they can merge.
+- The Sprint 0 carry-over (stricter CLI tests from the PR #2 review) was done in #4.
 - **Carry-over to Sprint 2:** map `isInsuranceAvailable` explicitly; pass each pack's `offerPercentage`/`offerInsuredPercentage` through; skip and log packs whose Hit Rates are rejected. All of these are in #15 and #17.
