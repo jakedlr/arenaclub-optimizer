@@ -38,3 +38,23 @@
 - **Interruptions:** an account usage limit stopped two agents mid-task. Both resumed from their saved state after the reset with no lost work. GitHub had brief 500s during an incident, and pushes succeeded on retry.
 - **Carry-over to Sprint 4:** Watch Mode must inspect `FetchResult.skipped`. Losing the network mid-run currently exits 0.
 - **Blocked for Sprint 3:** the user needs a PokéPrice Tracker API key (free personal tier) for live value checks.
+
+## Sprint 3: values (2026-11-24 to 2026-11-25)
+**Done:**
+- Value pipeline core: identity, quotes, cache, budget and resolver (#26, PR #30)
+- CardVolume provider (#27, PR #31)
+- PokéPrice Tracker provider (#28, PR #32)
+- Values wired into `rank`, plus `arena review` (#29, PR #33)
+- Spending the budget pack-at-a-time, cheapest pack first (#34, PR #35). The user chose this approach.
+
+1332 tests. Live run with no PokéPrice key: CardVolume valued 2 of the 183 in-scope cards and 181 need review, so no packs are rankable yet. Expected time to the first ranked Gold Pokémon pack with a free PokéPrice key: about 5 days.
+
+**Retro**
+- **Building the foundation first paid off.** The value core (#26) went in before the providers. #27 and #28 were then built in parallel against a single contract, with no drift between them, which avoids the Sprint 1 problem.
+- **Wrong-match bugs are the dangerous kind.** Two blocking review findings came from fuzzy matching that returned a *wrong* card at high confidence: a CardVolume Promo wildcard matching the wrong year, and PokéPrice matching on number alone (Charizard #4 → Palkia #4). We now fail safe: an ambiguous or partial match returns Unmatched or LOW confidence. Reviewers reproduced both bugs offline with mock data before the fixes.
+- **Undisclosed scope needs review too.** The stale-cache fallback in #26 was never asked for, and it introduced two blocking bugs: a retracted quote could be served, and stale quotes looked fresh. Reviewers should treat any undisclosed scope as high-risk.
+- **Key hygiene.** Reviewers actively tried to leak the API key. They found it exposed through captured traceback locals and through `__context__` request headers. Moving it into an `httpx.Auth` class fixed both.
+- **Budget economics drove the design.** The free PokéPrice tier (100 credits a day, 7–8 per first lookup) combined with the 95% Value Coverage rule made "how to spend credits" a real product decision. It went to the user, who chose pack-at-a-time.
+- **Interruptions.** We hit an account usage limit overnight. Agents resumed cleanly after the reset.
+- **Still blocked:** the user needs a PokéPrice Tracker key to get real rankings. Until then, Manual Overrides via `arena review` are the only route.
+- **Carry-over to Sprint 4:** check `FetchResult.skipped` (degraded runs), rebuild providers every cycle, and honour Retry-After. These are in #38.
