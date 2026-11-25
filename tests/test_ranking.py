@@ -142,6 +142,29 @@ def test_keeps_only_the_top_n():
     assert ids(report) == ["p4", "p3"]
 
 
+def test_matching_holds_every_pack_that_passes_the_filters_before_the_top_n_cut():
+    packs = [flat_pack(f"p{i}", 100 + i) for i in range(5)] + [risky_pack("risky")]
+
+    report = run(packs, with_filters(top=2, exclude_high_variance=True))
+
+    assert [r.pack.pack_id for r in report.matching] == ["p4", "p3", "p2", "p1", "p0"]
+    assert report.results == report.matching[:2]
+
+
+def test_matching_leaves_out_unrankable_and_skipped_packs():
+    report = run([flat_pack("ok", 120), unvalued_pack("u")])
+
+    assert [r.pack.pack_id for r in report.matching] == ["ok"]
+
+
+def test_a_hand_built_report_defaults_matching_to_its_results():
+    result = run([flat_pack("ok", 120)]).results
+
+    built = RankingReport(result, (), (), WHEN, NO_VALUES)
+
+    assert built.matching == result
+
+
 def test_default_top_is_ten():
     packs = [flat_pack(f"p{i:02}", 100 + i) for i in range(12)]
 

@@ -173,6 +173,30 @@ def test_a_pack_still_in_the_results_is_not_alerted_again():
     assert state.packs["gp"] == AlertedPack(0.042, T0, last_seen_at=T1)
 
 
+def cut(top: int, *results: RankedPack) -> RankingReport:
+    """A report whose Top Results are cut to `top`, as `rank` cuts them,
+    with every pack that met the criteria in `matching`."""
+    ordered = tuple(sorted(results, key=lambda r: -r.ev.buyback_ev_pct))
+    return RankingReport(ordered[:top], (), (), T0, NO_VALUES, matching=ordered)
+
+
+def test_a_pack_crossing_the_top_n_edge_is_not_alerted_again():
+    # "edge" is 2nd, then 3rd (cut by --top 2), then 2nd again; it met the
+    # criteria all along, so it is Entered once.
+    cycles, state = run(
+        cut(2, ranked("a", 0.30), ranked("edge", 0.10), ranked("c", 0.08)),
+        cut(2, ranked("a", 0.30), ranked("c", 0.12), ranked("edge", 0.10)),
+        cut(2, ranked("a", 0.30), ranked("edge", 0.10), ranked("c", 0.08)),
+    )
+
+    assert [[a.result.pack.pack_id for a in c] for c in cycles] == [
+        ["a", "edge", "c"],
+        [],
+        [],
+    ]
+    assert state.packs["edge"] == AlertedPack(0.10, T0, last_seen_at=T2)
+
+
 def test_an_empty_report_sends_nothing():
     alerts, state = detect(AlertState(), report(), now=T0)
 
