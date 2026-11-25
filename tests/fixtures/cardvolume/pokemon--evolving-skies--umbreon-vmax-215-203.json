@@ -1,0 +1,53 @@
+{
+ "id": "pokemon/evolving-skies/umbreon-vmax-215-203",
+ "url": "https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/",
+ "name": "Umbreon VMAX",
+ "set": "Evolving Skies",
+ "number": "215/203",
+ "year": 2021,
+ "language": "English",
+ "updated": "2026-11-22",
+ "as_of": "2026-11-24",
+ "versions": [
+  {
+   "key": "english-alternate-art-secret",
+   "label": "English Alternate Art Secret, 215/203"
+  }
+ ],
+ "grades": [
+  {
+   "version_key": "english-alternate-art-secret",
+   "grader": "PSA",
+   "grade": "10",
+   "market_price_usd": 3800,
+   "market_sales_n": 47,
+   "last_verified_sale": {
+    "date": "2026-11-21",
+    "price_usd": 3416.06
+   }
+  },
+  {
+   "version_key": "english-alternate-art-secret",
+   "grader": "PSA",
+   "grade": "9",
+   "market_price_usd": 1925.995,
+   "market_sales_n": 14,
+   "last_verified_sale": {
+    "date": "2026-11-21",
+    "price_usd": 1775
+   }
+  },
+  {
+   "version_key": "english-alternate-art-secret",
+   "grader": "PSA",
+   "grade": "7",
+   "market_price_usd": null,
+   "market_sales_n": 1,
+   "last_verified_sale": {
+    "date": "2026-09-20",
+    "price_usd": 1677.7
+   }
+  }
+ ],
+ "cite_as": "Umbreon VMAX 215/203 (Evolving Skies). CardVolume, https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/ (accessed 2026-11-24)."
+}

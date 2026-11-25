@@ -1,0 +1,87 @@
+{
+ "as_of": "2026-11-24",
+ "count": 9,
+ "cards": [
+  {
+   "id": "pokemon/evolving-skies/umbreon-vmax-215-203",
+   "name": "Umbreon VMAX",
+   "category": "pokemon",
+   "set": "Evolving Skies",
+   "number": "215/203",
+   "year": 2021,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/prismatic-evolutions/umbreon-ex-161-131",
+   "name": "Umbreon ex",
+   "category": "pokemon",
+   "set": "Prismatic Evolutions",
+   "number": "161/131",
+   "year": 2025,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023",
+   "name": "Mega Charizard X ex",
+   "category": "pokemon",
+   "set": "Mega Evolution Promo Cards",
+   "number": "023/132",
+   "year": 2025,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/phantasmal-flames/mega-charizard-x-ex-125",
+   "name": "Mega Charizard X ex",
+   "category": "pokemon",
+   "set": "Mega Evolution—Phantasmal Flames",
+   "number": "125/94",
+   "year": 2025,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/sm-black-star-promos/moltres-and-zapdos-and-articuno-gx-sm210",
+   "name": "Moltres & Zapdos & Articuno-GX",
+   "category": "pokemon",
+   "set": "SM Black Star Promos",
+   "number": "SM210/248",
+   "year": 2019,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/crown-zenith/radiant-charizard-020-159",
+   "name": "Radiant Charizard",
+   "category": "pokemon",
+   "set": "Crown Zenith",
+   "number": "020/159",
+   "year": 2023,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/crown-zenith-galarian-gallery/mewtwo-vstar-gg44-gg70",
+   "name": "Mewtwo VSTAR",
+   "category": "pokemon",
+   "set": "Crown Zenith Galarian Gallery",
+   "number": "GG44/70",
+   "year": 2023,
+   "language": "English"
+  },
+  {
+   "id": "pokemon/japanese-base-set/charizard-no-rarity-006-japanese",
+   "name": "Charizard",
+   "category": "pokemon",
+   "set": "Japanese Base Set",
+   "number": "006",
+   "year": 1996,
+   "language": "Japanese"
+  },
+  {
+   "id": "pokemon/base-set/charizard-4-102",
+   "name": "Charizard",
+   "category": "pokemon",
+   "set": "Base Set",
+   "number": "4/102",
+   "year": 1999,
+   "language": "English"
+  }
+ ]
+}
