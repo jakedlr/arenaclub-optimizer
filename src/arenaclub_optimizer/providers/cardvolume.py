@@ -44,6 +44,8 @@ DEFAULT_MIN_INTERVAL = 1.0
 DEFAULT_TIMEOUT = 15.0
 
 _INDEX_PATH = "/cards.json"
+_PROMO = "promo"
+_PROMO_WORDS = frozenset({"promo", "promos"})
 # Index ids become URL paths, so only allow the characters CardVolume uses.
 _CARD_ID = re.compile(r"[A-Za-z0-9-]+(?:/[A-Za-z0-9-]+)*")
 _AMPERSAND = re.compile(r"\s*[&/]\s*")
@@ -63,8 +65,11 @@ class CardVolumeProvider:
     """A ValueProvider backed by cardvolume.com's free JSON API.
 
     The index is cached as `INDEX_FILENAME` in `cache_dir` (by default the
-    value cache's directory). With a `budget`, a 403 or 429 marks the rest of
-    today exhausted for "cardvolume", so later runs today don't ask again.
+    value cache's directory). If refreshing a stale index fails (network,
+    5xx, unusable body), the stale index is used with a warning; with no
+    cached index, the failure is raised. A 403 or 429 always raises; with a
+    `budget` it also marks the rest of today exhausted for "cardvolume", so
+    later runs today don't ask again.
     `clock` and `sleep` drive request spacing and `utc_now` the index's age;
     tests pass fakes.
     """
@@ -134,12 +139,15 @@ class CardVolumeProvider:
         grades = card.get("grades")
         if not isinstance(grades, list):
             raise _unusable(f"card {entry['id']}")
-        grade = _grade_entry(grades, identity.grader, identity.grade)
-        if grade is None:
+        found = _grade_entry(grades, identity.grader, identity.grade)
+        if found is None:
             return NotFound()
-        return self._grade_quote(card, grade)
+        grade, uncertain = found
+        return self._grade_quote(card, grade, uncertain=uncertain)
 
-    def _grade_quote(self, card: Json, grade: Json) -> QuoteResult:
+    def _grade_quote(self, card: Json, grade: Json, *, uncertain: bool) -> QuoteResult:
+        """The quote for one `grades[]` entry. `uncertain` lowers a market
+        price to low confidence (see `_grade_entry`)."""
         citation = card.get("cite_as") if isinstance(card.get("cite_as"), str) else None
         market = _price(grade.get("market_price_usd"))
         if market is not None:
@@ -150,7 +158,7 @@ class CardVolumeProvider:
                 source=NAME,
                 as_of=as_of or self._utc_now().date(),
                 sales_count=sales if _is_count(sales) else None,
-                confidence=ValueConfidence.HIGH,
+                confidence=(ValueConfidence.LOW if uncertain else ValueConfidence.HIGH),
                 citation=citation,
             )
         # Under 5 sales in 90 days CardVolume gives no market price; its docs
@@ -183,7 +191,23 @@ class CardVolumeProvider:
             age = now - cached.fetched_at
             if timedelta(0) <= age < INDEX_MAX_AGE:
                 return cached.cards
+        try:
+            return self._refresh_index(cached, now)
+        except _Refused:
+            raise
+        except ProviderUnavailable as error:
+            if cached is None:
+                raise
+            # Keep answering through a short outage. The file stays stale, so
+            # the next run tries again. A refusal (403/429) still backs off.
+            logger.warning(
+                "using the stale CardVolume index from %s: %s",
+                cached.fetched_at.isoformat(),
+                error,
+            )
+            return cached.cards
 
+    def _refresh_index(self, cached: _CachedIndex | None, now: datetime) -> list[Any]:
         headers = {}
         if cached is not None:
             if cached.etag:
@@ -245,7 +269,7 @@ class CardVolumeProvider:
             if self._budget is not None:
                 self._budget.exhaust(NAME)
                 retry_after = self._budget.resets_at()
-            raise ProviderUnavailable(
+            raise _Refused(
                 retry_after, reason=f"CardVolume refused the request (HTTP {status})"
             )
         if status in (200, 304, 404):
@@ -254,14 +278,17 @@ class CardVolumeProvider:
 
 
 def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
-    """The first index entry that is the identity's card, or None.
+    """The one index entry that is the identity's card, or None when no entry
+    or more than one matches.
 
     Compares name, set (the identity's insert, else its subset name) and
     number, after normalising both sides: case, "&" and "/", the "-"/" "
     before an "EX"/"GX" suffix, leading zeros and a "/total" suffix are
     ignored. An identity whose set is just "Promo" (Arena Club's subset name
-    for promos) matches any set with "promo" in its name. The language must
-    agree, and an entry whose id isn't a safe path is never matched.
+    for promos) matches any set with "promo" or "promos" in its name, but then
+    the year must agree too when both sides give one: promo numbers repeat
+    across eras. The language must agree, and an entry whose id isn't a safe
+    path is never matched.
     """
     name = _text_key(identity.card_name)
     set_key = _text_key(identity.insert or identity.subset_name)
@@ -269,6 +296,7 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
     if not (name and set_key and number):
         return None
     language = identity.language.value
+    matches = []
     for entry in cards:
         if not isinstance(entry, dict):
             continue
@@ -278,17 +306,28 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
         if (
             _text_key(entry.get("name")) == name
             and _number_key(entry.get("number")) == number
-            and _same_set(set_key, _text_key(entry.get("set")))
+            and _same_set(set_key, entry, identity.year)
             and str(entry.get("language") or "English").casefold().startswith(language)
         ):
-            return entry
-    return None
+            matches.append(entry)
+    if len(matches) > 1:
+        logger.info(
+            "CardVolume: %d index entries match %s, leaving it unmatched",
+            len(matches),
+            identity.card_name,
+        )
+        return None
+    return matches[0] if matches else None
 
 
-def _same_set(wanted: str, offered: str) -> bool:
-    if wanted == "promo":
-        return "promo" in offered.split()
-    return wanted == offered
+def _same_set(wanted: str, entry: Json, year: int | None) -> bool:
+    offered = _text_key(entry.get("set"))
+    if wanted != _PROMO:
+        return wanted == offered
+    if not _PROMO_WORDS.intersection(offered.split()):
+        return False
+    entry_year = entry.get("year")
+    return year is None or not isinstance(entry_year, int) or entry_year == year
 
 
 def _text_key(value: object) -> str:
@@ -306,10 +345,17 @@ def _number_key(value: object) -> str:
     return _NUMBER_PREFIX_ZEROS.sub(r"\1", number)
 
 
-def _grade_entry(grades: list[Any], grader: str, grade: str) -> Json | None:
-    """The `grades[]` entry for `grader` (any case) and `grade`. An exact
-    grade wins; otherwise one whose grade carries a suffix, e.g. "10 Pristine"
-    for "10"."""
+def _grade_entry(
+    grades: list[Any], grader: str, grade: str
+) -> tuple[Json, bool] | None:
+    """The `grades[]` entry for `grader` (any case) and `grade`, and whether
+    it is uncertain. An exact grade wins; otherwise one whose grade carries a
+    suffix, e.g. "10 Pristine" for "10".
+
+    Uncertain means a suffix-only match (a bare "CGC 10" may not be Pristine,
+    a "BGS 10" not Black Label, and those sell at a premium), or several
+    versions of the card at this grade (Arena's parallel isn't mapped to a
+    CardVolume version yet), in which case the first is used."""
     entries = [
         g
         for g in grades
@@ -318,14 +364,21 @@ def _grade_entry(grades: list[Any], grader: str, grade: str) -> Json | None:
         and isinstance(g.get("grade"), str)
         and g["grader"].casefold() == grader.casefold()
     ]
-    for entry in entries:
-        if _same_grade(entry["grade"], grade):
-            return entry
-    for entry in entries:
-        head = entry["grade"].split(maxsplit=1)
-        if head and _same_grade(head[0], grade):
-            return entry
+    exact = [g for g in entries if _same_grade(g["grade"], grade)]
+    if exact:
+        return exact[0], _several_versions(exact)
+    suffixed = [
+        g
+        for g in entries
+        if (head := g["grade"].split(maxsplit=1)) and _same_grade(head[0], grade)
+    ]
+    if suffixed:
+        return suffixed[0], True
     return None
+
+
+def _several_versions(entries: list[Json]) -> bool:
+    return len({str(g.get("version_key")) for g in entries}) > 1
 
 
 def _same_grade(offered: str, wanted: str) -> bool:
@@ -362,6 +415,10 @@ def _json_object(response: httpx.Response, what: str) -> Json:
     if not isinstance(body, dict):
         raise _unusable(what)
     return body
+
+
+class _Refused(ProviderUnavailable):
+    """CardVolume answered 403 or 429: back off, never fall back or retry."""
 
 
 def _unusable(what: str) -> ProviderUnavailable:
