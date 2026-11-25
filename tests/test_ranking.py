@@ -338,7 +338,7 @@ def test_inactive_packs_are_excluded_entirely():
 def test_inactive_pack_with_an_empty_checklist_is_excluded_without_error():
     report = run([pack("sold-out", [], active=False)])
 
-    assert report == RankingReport((), (), (), WHEN)
+    assert report == RankingReport((), (), (), WHEN, NO_VALUES)
 
 
 def test_buyback_disabled_packs_are_skipped_with_a_reason():

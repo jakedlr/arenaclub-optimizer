@@ -330,10 +330,10 @@ def test_the_snippet_keys_on_the_cert_else_the_card_id():
     }
 
 
-def test_the_snippet_names_the_reason_and_slab_packs_in_a_comment():
+def test_the_snippet_names_the_slab_packs_and_reason_in_a_comment():
     snippet = overrides_snippet([NO_CERT])
 
-    assert "# no raw price (Gold Pokemon, Silver Pokemon)" in snippet.splitlines()
+    assert "# Gold Pokemon, Silver Pokemon: no raw price" in snippet.splitlines()
 
 
 def test_a_filled_in_snippet_loads_as_manual_overrides(tmp_path):

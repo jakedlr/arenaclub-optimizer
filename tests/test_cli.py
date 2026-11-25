@@ -1116,10 +1116,10 @@ def test_review_uses_the_config_file_filters(arena, config_dir):
     assert reviewed_ids() == ["card_gf_1"]
 
 
-def test_review_fetches_only_matching_packs(arena):
+def test_review_fetches_only_the_cards_of_matching_packs(arena):
     review("--category", "football")
 
-    assert arena.requested("pack") == ["gold-football"]
+    assert arena.requested("card") == ["card_gf_1"]
 
 
 def test_review_rejects_invalid_options_before_any_request(arena):
