@@ -836,3 +836,38 @@ def test_a_quote_cached_from_a_provider_not_in_use_does_not_count(cache):
     cache.put("card_a", "old", quote(1.0, "old"), fetched_at=NOW)
 
     assert not free(checklist_card("card_a"), [FakeProvider("pp")], cache)
+
+
+def set_up_case(case: str, cache) -> Overrides:
+    """Leave card_a's value where `case` says, and return the overrides."""
+    if case == "override":
+        return Overrides(by_card_id={"card_a": Override(5.0)})
+    stale = NOW - timedelta(days=8)
+    entries = {
+        "fresh": ("pp", quote(1.0, "pp"), NOW),
+        "stale": ("pp", quote(1.0, "pp"), stale),
+        "negative": ("pp", NotFound(), NOW),
+        "unknown-source": ("old", quote(1.0, "old"), NOW),
+    }
+    if case in entries:
+        source, result, fetched_at = entries[case]
+        cache.put("card_a", source, result, fetched_at=fetched_at)
+    return NO_OVERRIDES
+
+
+@pytest.mark.parametrize(
+    "case", ["override", "fresh", "stale", "negative", "unknown-source", "nothing"]
+)
+def test_valued_without_lookup_agrees_with_resolve_values(cache, budget, case):
+    card = checklist_card("card_a")
+    overrides = set_up_case(case, cache)
+    provider = FakeProvider("pp")
+
+    predicted = free(card, [provider], cache, overrides=overrides)
+    result = resolve([card], [provider], cache, budget, overrides=overrides)
+
+    origin = result.origins.get("card_a")
+    assert predicted == (origin in {ValueOrigin.OVERRIDE, ValueOrigin.CACHE})
+    if predicted:
+        assert provider.calls == []
+    assert predicted == (case in {"override", "fresh"})
