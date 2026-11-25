@@ -21,7 +21,7 @@ from arenaclub_optimizer.model import (
     ValueConfidence,
 )
 from arenaclub_optimizer.values.budget import CreditBudget
-from arenaclub_optimizer.values.cache import ValueCache
+from arenaclub_optimizer.values.cache import CacheEntry, ValueCache
 from arenaclub_optimizer.values.quote import (
     OVERRIDE_SOURCE,
     NotFound,
@@ -181,15 +181,34 @@ class _Run:
             p.name: self.cache.get(card.card_id, p.name, now=self.now)
             for p in self.providers
         }
-        for entry in entries.values():
-            if (
-                entry is not None
-                and entry.fresh
-                and isinstance(entry.result, ValueQuote)
-            ):
-                self._found(card, entry.result, ValueOrigin.CACHE)
-                return
+        cached = _first_quote(entries.values(), fresh_only=True)
+        if cached is not None:
+            self._found(card, cached, ValueOrigin.CACHE)
+            return
 
+        fetched, causes, asked_all = self._ask_providers(card, entries)
+        if fetched is not None:
+            self._found(card, fetched, ValueOrigin.FETCHED)
+            return
+
+        stale = None if asked_all else _first_quote(entries.values(), fresh_only=False)
+        if stale is not None:
+            self._found(card, stale, ValueOrigin.STALE_CACHE)
+            return
+        self.needs_review.append(
+            NeedsReview(card.card_id, card.cert_number, card.label, _reason(causes))
+        )
+
+    def _ask_providers(
+        self, card: ChecklistCard, entries: Mapping[str, CacheEntry | None]
+    ) -> tuple[ValueQuote | None, list[tuple[str, str]], bool]:
+        """Ask each provider in turn until one quotes, caching every answer.
+
+        Returns the quote (or None), each provider's (name, cause) for not
+        quoting, and whether every provider gave an answer, fresh from the
+        cache or from asking; False when one was skipped for budget or
+        unavailability.
+        """
         raw = is_arena_club_graded(card.identity)
         identity = (
             dataclasses.replace(card.identity, grader=None, grade=None)
@@ -197,40 +216,30 @@ class _Run:
             else card.identity
         )
         causes: list[tuple[str, str]] = []
-        could_not_ask = False
+        asked_all = True
         for provider in self.providers:
             entry = entries[provider.name]
             if entry is not None and entry.fresh:
                 causes.append((provider.name, _negative_cause(entry.result, raw)))
                 continue
-            cause = self._cannot_ask(provider)
-            if cause is not None:
-                causes.append((provider.name, cause))
-                could_not_ask = True
-                continue
-            try:
-                result = provider.quote(identity)
-            except ProviderUnavailable as error:
-                self.unavailable[provider.name] = error
-                causes.append((provider.name, str(error)))
-                could_not_ask = True
+            skip = self._cannot_ask(provider)
+            if skip is None:
+                try:
+                    result = provider.quote(identity)
+                except ProviderUnavailable as error:
+                    self.unavailable[provider.name] = error
+                    skip = str(error)
+            if skip is not None:
+                causes.append((provider.name, skip))
+                asked_all = False
                 continue
             if isinstance(result, ValueQuote) and raw:
                 result = dataclasses.replace(result, confidence=ValueConfidence.LOW)
             self.cache.put(card.card_id, provider.name, result, fetched_at=self.now)
             if isinstance(result, ValueQuote):
-                self._found(card, result, ValueOrigin.FETCHED)
-                return
+                return result, causes, asked_all
             causes.append((provider.name, _negative_cause(result, raw)))
-
-        if could_not_ask:
-            for entry in entries.values():
-                if entry is not None and isinstance(entry.result, ValueQuote):
-                    self._found(card, entry.result, ValueOrigin.STALE_CACHE)
-                    return
-        self.needs_review.append(
-            NeedsReview(card.card_id, card.cert_number, card.label, _reason(causes))
-        )
+        return None, causes, asked_all
 
     def _cannot_ask(self, provider: ValueProvider) -> str | None:
         """Why `provider` can't be asked now, or None if it can."""
@@ -247,6 +256,17 @@ class _Run:
     ) -> None:
         self.values[card.card_id] = quote
         self.origins[card.card_id] = origin
+
+
+def _first_quote(
+    entries: Iterable[CacheEntry | None], *, fresh_only: bool
+) -> ValueQuote | None:
+    for entry in entries:
+        if entry is None or (fresh_only and not entry.fresh):
+            continue
+        if isinstance(entry.result, ValueQuote):
+            return entry.result
+    return None
 
 
 def _negative_cause(result: QuoteResult, raw: bool) -> str:

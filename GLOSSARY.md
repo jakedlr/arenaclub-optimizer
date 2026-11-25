@@ -49,6 +49,10 @@ _Avoid_: Market value, price, comp
 What a specific graded card (same card, grading company and grade) sells for on public markets, based on comps.
 _Avoid_: Price, AC Value
 
+**Value Quote**:
+A Market Value as one source states it: the figure, the date it applies to, how many sales it rests on, how far it can be trusted, and the citation the source asks for, if any. A Manual Override counts as a Value Quote from the user.
+_Avoid_: Price, comp, valuation
+
 **k**:
 The assumed ratio of AC Value to Market Value, set by the user (default 1.0).
 _Avoid_: Multiplier, markup

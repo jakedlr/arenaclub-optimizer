@@ -5,7 +5,6 @@ The file is `values.sqlite` in `$XDG_CACHE_HOME/arenaclub-optimizer/` (else
 `~/.cache/arenaclub-optimizer/`), or in a directory the caller passes.
 """
 
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -13,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
+from arenaclub_optimizer.config import cache_dir
 from arenaclub_optimizer.model import ValueConfidence
 from arenaclub_optimizer.values.quote import (
     NotFound,
@@ -64,9 +64,7 @@ def default_cache_dir() -> Path:
 
     Per the XDG spec, an unset, empty or relative ``XDG_CACHE_HOME`` is ignored.
     """
-    xdg = os.environ.get("XDG_CACHE_HOME", "")
-    base = Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".cache"
-    return base / "arenaclub-optimizer"
+    return cache_dir()
 
 
 @dataclass(frozen=True)

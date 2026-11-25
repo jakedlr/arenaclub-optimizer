@@ -1,7 +1,8 @@
 """User configuration and the Manual Overrides file.
 
 Both files are TOML and live in `$XDG_CONFIG_HOME/arenaclub-optimizer/`, falling
-back to `~/.config/arenaclub-optimizer/`. Loading never writes anything; a
+back to `~/.config/arenaclub-optimizer/`. `cache_dir` is the matching cache
+directory, shared by the card and value caches. Loading never writes anything; a
 missing file means defaults (or no Manual Overrides).
 """
 
@@ -107,6 +108,20 @@ def config_dir(
     xdg = env.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else (home if home is not None else Path.home()) / ".config"
     return base / APP_DIR_NAME
+
+
+def cache_dir(
+    environ: Mapping[str, str] | None = None, home: Path | None = None
+) -> Path:
+    """Return the app's cache directory, honouring `XDG_CACHE_HOME`.
+
+    Per the XDG spec, an unset, empty or relative `XDG_CACHE_HOME` is ignored.
+    """
+    env = os.environ if environ is None else environ
+    xdg = env.get("XDG_CACHE_HOME", "")
+    if xdg and Path(xdg).is_absolute():
+        return Path(xdg) / APP_DIR_NAME
+    return (home if home is not None else Path.home()) / ".cache" / APP_DIR_NAME
 
 
 def load_config(path: Path | None = None, *, directory: Path | None = None) -> Config:
