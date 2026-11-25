@@ -5,7 +5,8 @@ from importlib.metadata import version
 from typing import Annotated, NoReturn
 
 import typer
-from rich.console import Console
+from rich.console import Console, RenderableType
+from rich.measure import Measurement
 from rich.text import Text
 
 from arenaclub_optimizer.arena_client import (
@@ -202,7 +203,7 @@ def rank(
 
     console = Console()
     if report.results:
-        console.print(results_table(report, config.k, wide=wide))
+        _print_untruncated(console, results_table(report, config.k, wide=wide))
     else:
         console.print("No Slab Packs met the criteria.")
     # Text, not str: pack names, notes and reasons come from Arena Club and
@@ -231,6 +232,20 @@ def _fraction(percent: float | None) -> float | None:
 def _fail(message: str, code: int) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code=code)
+
+
+def _print_untruncated(console: Console, renderable: RenderableType) -> None:
+    """Print `renderable` no narrower than it can go without truncating, so a
+    figure is never cut short: on a terminal too narrow for it, such as
+    `--wide` at 80 columns, it runs past the edge instead."""
+    unbounded = console.options.update_width(10_000)
+    needed = Measurement.get(console, unbounded, renderable).minimum
+    width = console.width
+    console.width = max(width, needed)
+    try:
+        console.print(renderable)
+    finally:
+        console.width = width
 
 
 @contextmanager

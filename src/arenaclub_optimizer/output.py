@@ -81,9 +81,15 @@ def results_table(report: RankingReport, k: float, *, wide: bool = False) -> Tab
         title="Top Results",
         caption=f"Buyback EV is an estimate: AC Value = k × Market Value, k = {k:g}.",
         box=box.SIMPLE_HEAVY,
+        show_edge=False,
+        pad_edge=False,
     )
     columns = [c for c in _COLUMNS if wide or not c.wide]
-    table.add_column("Slab Pack", overflow="fold")
+    names = [pack_name(result.pack) for result in report.results]
+    # Wide enough for the longest word, so a name wraps between words; only
+    # a word longer than the cap is split.
+    longest = max((len(word) for name in names for word in name.split()), default=0)
+    table.add_column("Slab Pack", overflow="fold", min_width=min(longest, 16))
     for column in columns:
         table.add_column(column.header, justify="right", no_wrap=True)
     for result in report.results:
