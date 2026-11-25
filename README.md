@@ -19,11 +19,42 @@ uv run arena rank --wide
 uv run arena rank --json
 uv run arena review --category pokemon --price-max 100
 uv run arena topic --test
+uv run arena watch --category pokemon --price-max 100
 ```
 
 `arena rank` options override the config file (`docs/config.example.toml`). On the command line, `--min-ev` and `--min-p-profit` take percents (`5` means 5%), while the config file writes the same settings as fractions (`0.05`). The table fits 80 columns, with each Slab Pack's Notes on their own lines under it; `--wide` adds Market EV %, Slab Safe EV $ and Coverage. Requests are spaced 1 s apart and card details are cached, so the first run for a Category takes several minutes and later runs are much faster. A price range also cuts requests: Price Levels outside it are skipped before any Slab Pack is fetched. If Arena Club blocks a request (HTTP 403 or 429), the command stops at once and exits with code 2.
 
 `arena topic` prints the Topic, the ntfy channel Watch Mode sends Alerts to, and its subscribe URL. Subscribe in the ntfy app or open the URL in a browser; `--test` sends one test notification so you can check it arrives. The Topic is generated at random on first use and saved in `$XDG_STATE_HOME/arenaclub-optimizer/topic` (else `~/.local/state/...`); anyone who knows it can read your Alerts, so keep it private. Set `watch.topic` or `watch.ntfy_server` in the config file to use your own.
+
+## Watch Mode
+
+`arena watch` runs the same ranking as `rank` every 10 minutes and sends Alerts to your Topic through ntfy. It takes `rank`'s filter options (`--category`, `--price-min`, `--price-max`, `--min-ev`, `--min-p-profit`, `--exclude-high-variance`, `--k`), plus:
+
+- `--interval MINUTES`: time between cycles, at least 5 (default: `watch.interval_minutes` in the config file, else 10). Each wait varies by up to 10% either way and is measured from the start of the last cycle, so a cycle that runs long is followed at once. Cycles never overlap.
+- `--once`: run one cycle and exit, with 0 if it went fine and 1 if it failed.
+- `--quiet`: print a cycle's summary line only when the cycle fails.
+
+At start it prints your Topic and its subscribe URL. Each cycle then prints one line, for example `[2026-11-26 10:00 UTC] 2 ranked, 5 unrankable, 0 skipped; 1 alert sent`, where "ranked" counts every Slab Pack that meets the criteria.
+
+An Alert goes out when a Slab Pack newly meets your criteria, or when its Buyback EV % rises 5 percentage points above the value last alerted. A pack that stays in gets no repeat Alert. Every pack that meets the criteria counts, not only the top 10, so `watch` has no `--top`. Watch Mode also sends one Alert when requests to Arena Club start failing and one when they work again. What has been alerted is kept in `$XDG_STATE_HOME/arenaclub-optimizer/alerts.json`, so a restart doesn't repeat Alerts. A notification that can't be sent is logged and tried again on the next cycle.
+
+When a cycle fails, Watch Mode backs off instead of waiting the interval. Failure means Arena Club blocked a request (HTTP 403 or 429), another request failed, more than half the Slab Packs couldn't be fetched, or the value cache couldn't be used. The first failure waits one interval, and each further failure doubles the wait, up to 2 hours. If Arena Club's Retry-After asks for longer, Watch Mode waits that long instead. A successful cycle resets the back-off. Each cycle opens a new connection to Arena Club and new value sources, and closes them at its end. The caches are on disk, so they carry over between cycles.
+
+Ctrl+C (or SIGTERM) abandons the cycle in progress, saves the Alert state and exits 0. Watch Mode reads the config and overrides files once at start, so restart it after you change them.
+
+### Running it in the background (Linux and WSL)
+
+With `nohup`, from the repo directory:
+
+```sh
+mkdir -p ~/.local/state/arenaclub-optimizer
+nohup uv run arena watch --quiet --category pokemon --price-max 100 \
+  >> ~/.local/state/arenaclub-optimizer/watch.log 2>&1 &
+```
+
+Stop it with `pkill -f "arena watch"` (SIGTERM, so it saves its state). The log starts with your Topic, so keep it private. On WSL, Windows may stop the Linux distribution once no WSL terminal is open, which stops Watch Mode too. Keep a WSL window open while it runs.
+
+With systemd, run it as a user service: [`docs/arena-watch.service`](docs/arena-watch.service) is an example unit, with instructions for installing it and turning systemd on in WSL. Follow its output with `journalctl --user -u arena-watch -f`.
 
 ## Values
 

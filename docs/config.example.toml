@@ -43,7 +43,7 @@ exclude_high_variance = false
 top = 10
 
 [watch]
-# Watch Mode settings (Watch Mode itself arrives in a later sprint).
+# Watch Mode settings (`arena watch`); --interval overrides interval_minutes.
 # Minutes between runs; the minimum is 5.
 interval_minutes = 10
 # ntfy server that Alerts are sent to.
