@@ -394,7 +394,7 @@ def test_review_json_lists_each_card():
 
     assert document["version"] == 1
     assert document["generated_at"] == WHEN.isoformat()
-    assert document["summary"] == {"needs_review": 2, "waiting_on_budget": 0}
+    assert document["summary"] == {"needs_review": 2, "waiting": 0}
     assert document["settings"] == report_json(report(), Config())["settings"]
     assert document["unavailable_sources"] == {"pokeprice": "PokéPrice key not set"}
     assert document["needs_review"][1] == {
@@ -406,7 +406,7 @@ def test_review_json_lists_each_card():
     }
 
 
-# --- cards waiting on budget -----------------------------------------------------
+# --- waiting cards -----------------------------------------------------------------
 
 WAITING = ReviewEntry(
     card_id="card_wait",
@@ -422,7 +422,7 @@ def test_review_entries_are_not_waiting_by_default():
     assert UMBREON.waiting is False
 
 
-def test_the_snippet_leaves_out_cards_waiting_on_budget():
+def test_the_snippet_leaves_out_cards_waiting():
     data = tomllib.loads(overrides_snippet([UMBREON, WAITING, NO_CERT]))
 
     assert set(data) == {"12345678", "card_ac"}
@@ -432,17 +432,17 @@ def test_the_snippet_is_empty_when_every_card_is_waiting():
     assert overrides_snippet([WAITING]) == ""
 
 
-def test_review_summary_counts_cards_waiting_on_budget_separately():
+def test_review_summary_counts_cards_waiting_separately():
     assert review_summary([UMBREON, WAITING, NO_CERT]) == (
-        "2 cards need review, 1 waiting on budget"
+        "2 cards need review, 1 waiting"
     )
-    assert review_summary([WAITING]) == "0 cards need review, 1 waiting on budget"
+    assert review_summary([WAITING]) == "0 cards need review, 1 waiting"
 
 
 def test_the_review_table_takes_a_title():
-    table = review_table([WAITING], title="Waiting on budget")
+    table = review_table([WAITING], title="Waiting")
 
-    assert "Waiting on budget" in render(table, 200)
+    assert "Waiting" in render(table, 200)
 
 
 def test_review_json_lists_waiting_cards_on_their_own():
@@ -453,9 +453,9 @@ def test_review_json_lists_waiting_cards_on_their_own():
         generated_at=WHEN,
     )
 
-    assert document["summary"] == {"needs_review": 1, "waiting_on_budget": 1}
+    assert document["summary"] == {"needs_review": 1, "waiting": 1}
     assert [e["card_id"] for e in document["needs_review"]] == ["card_umbreon"]
-    assert document["waiting_on_budget"] == [
+    assert document["waiting"] == [
         {
             "card_id": "card_wait",
             "cert_number": "99999999",

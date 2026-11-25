@@ -28,6 +28,10 @@ from arenaclub_optimizer.arena_client import USER_AGENT
 from arenaclub_optimizer.config import cache_dir as default_cache_dir
 from arenaclub_optimizer.model import CardIdentity, ValueConfidence
 from arenaclub_optimizer.spacing import RequestSpacer
+from arenaclub_optimizer.values.attribution import (
+    CARDVOLUME_NAME,
+    CARDVOLUME_SITE_URL,
+)
 from arenaclub_optimizer.values.budget import CreditBudget
 from arenaclub_optimizer.values.quote import (
     NotFound,
@@ -37,8 +41,8 @@ from arenaclub_optimizer.values.quote import (
     ValueQuote,
 )
 
-NAME = "cardvolume"
-SITE_URL = "https://cardvolume.com"
+NAME = CARDVOLUME_NAME
+SITE_URL = CARDVOLUME_SITE_URL
 BASE_URL = f"{SITE_URL}/api/v1"
 INDEX_FILENAME = "cardvolume-cards.json"
 INDEX_MAX_AGE = timedelta(days=1)

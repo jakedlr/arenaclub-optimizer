@@ -21,6 +21,7 @@ from arenaclub_optimizer.values import (
     ValueOrigin,
     ValueResolution,
     apply_values,
+    is_valued_without_lookup,
     resolve_values,
 )
 
@@ -791,3 +792,82 @@ def test_a_lasting_and_a_temporary_skip_together_are_waiting(cache):
     result = resolve([checklist_card("card_a")], providers, cache, budget)
 
     assert waiting(result) == {"card_a": True}
+
+
+# --- valued without a lookup ----------------------------------------------------
+
+
+def free(card, providers, cache, *, overrides=NO_OVERRIDES, now=NOW) -> bool:
+    return is_valued_without_lookup(card, providers, overrides, cache, now)
+
+
+def test_a_card_with_an_override_is_valued_without_a_lookup(cache):
+    card = checklist_card("card_a", cert="12345")
+    overrides = Overrides(by_cert={"12345": Override(75.0)})
+
+    assert free(card, [], cache, overrides=overrides)
+
+
+def test_a_fresh_cached_quote_from_any_provider_needs_no_lookup(cache):
+    cache.put("card_a", "cv", quote(1.0, "cv"), fetched_at=NOW)
+    providers = [FakeProvider("pp"), FakeProvider("cv")]
+
+    assert free(checklist_card("card_a"), providers, cache)
+    assert providers[0].calls == [] and providers[1].calls == []
+
+
+def test_a_card_with_nothing_cached_needs_a_lookup(cache):
+    assert not free(checklist_card("card_a"), [FakeProvider("pp")], cache)
+
+
+def test_a_stale_cached_quote_needs_a_lookup(cache):
+    cache.put("card_a", "pp", quote(1.0, "pp"), fetched_at=NOW - timedelta(days=8))
+
+    assert not free(checklist_card("card_a"), [FakeProvider("pp")], cache)
+
+
+def test_a_cached_negative_answer_is_not_a_value(cache):
+    cache.put("card_a", "pp", NotFound(), fetched_at=NOW)
+
+    assert not free(checklist_card("card_a"), [FakeProvider("pp")], cache)
+
+
+def test_a_quote_cached_from_a_provider_not_in_use_does_not_count(cache):
+    cache.put("card_a", "old", quote(1.0, "old"), fetched_at=NOW)
+
+    assert not free(checklist_card("card_a"), [FakeProvider("pp")], cache)
+
+
+def set_up_case(case: str, cache) -> Overrides:
+    """Leave card_a's value where `case` says, and return the overrides."""
+    if case == "override":
+        return Overrides(by_card_id={"card_a": Override(5.0)})
+    stale = NOW - timedelta(days=8)
+    entries = {
+        "fresh": ("pp", quote(1.0, "pp"), NOW),
+        "stale": ("pp", quote(1.0, "pp"), stale),
+        "negative": ("pp", NotFound(), NOW),
+        "unknown-source": ("old", quote(1.0, "old"), NOW),
+    }
+    if case in entries:
+        source, result, fetched_at = entries[case]
+        cache.put("card_a", source, result, fetched_at=fetched_at)
+    return NO_OVERRIDES
+
+
+@pytest.mark.parametrize(
+    "case", ["override", "fresh", "stale", "negative", "unknown-source", "nothing"]
+)
+def test_valued_without_lookup_agrees_with_resolve_values(cache, budget, case):
+    card = checklist_card("card_a")
+    overrides = set_up_case(case, cache)
+    provider = FakeProvider("pp")
+
+    predicted = free(card, [provider], cache, overrides=overrides)
+    result = resolve([card], [provider], cache, budget, overrides=overrides)
+
+    origin = result.origins.get("card_a")
+    assert predicted == (origin in {ValueOrigin.OVERRIDE, ValueOrigin.CACHE})
+    if predicted:
+        assert provider.calls == []
+    assert predicted == (case in {"override", "fresh"})

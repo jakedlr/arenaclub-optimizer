@@ -895,29 +895,45 @@ def test_only_cards_of_packs_matching_the_filters_are_valued(arena, values, conf
     assert provider.called_names == [player("card_gf_1")]
 
 
-def test_a_limited_budget_values_grail_and_chase_cards_first(arena, values, config_dir):
+def test_a_limited_budget_values_the_cheapest_pack_first(arena, values, config_dir):
     no_overrides(config_dir)
-    values.budget = CreditBudget(values.cache, {"pokeprice": 2}, clock=Clock(NOW))
-    values.providers = [
-        FakeProvider(
-            "pokeprice",
-            lambda _: quote(10.0, "pokeprice"),
-            credit_cost=1,
-            budget=values.budget,
-        )
-    ]
+    budget_for_two(values)
 
     document = review_document()
 
-    # Priority: the Grail card first, then by Hit Rate: Gold Football's only
-    # card (100%), Gold Pokemon's Lineup card (99.5%), Silver's two (50%).
-    waiting = [entry["card_id"] for entry in document["waiting_on_budget"]]
-    assert waiting == ["card_gp_base", "card_sp_1", "card_sp_2"]
+    # Pack at a time, cheapest first: Silver Pokemon ($50) takes the budget,
+    # then Gold Football and Gold Pokemon ($100 each, by pack id) wait.
+    asked = values.providers[0].called_names
+    assert asked == [player("card_sp_1"), player("card_sp_2")]
+    waiting = [entry["card_id"] for entry in document["waiting"]]
+    assert waiting == ["card_gf_1", "card_gp_hit", "card_gp_base"]
     assert all(
-        entry["reason"].startswith("budget exhausted")
-        for entry in document["waiting_on_budget"]
+        entry["reason"].startswith("budget exhausted") for entry in document["waiting"]
     )
     assert document["needs_review"] == []
+
+
+@pytest.mark.parametrize(
+    ("threshold", "first"),
+    [
+        # Silver Pokemon's override covers 50% of it: rankable at a 50%
+        # threshold, so the budget goes to the next pack instead.
+        ("0.5", "card_gf_1"),
+        ("0.95", "card_sp_2"),
+    ],
+)
+def test_a_pack_rankable_under_the_configured_threshold_spends_no_budget(
+    arena, values, config_dir, threshold, first
+):
+    (config_dir / "overrides.toml").write_text(
+        "[card_sp_1]\nmarket_value = 60\n", encoding="utf-8"
+    )
+    write_config(config_dir, f"coverage_threshold = {threshold}\n")
+    budget_for_two(values)
+
+    invoke()
+
+    assert values.providers[0].called_names[0] == player(first)
 
 
 def test_the_summary_line_counts_values_from_cache_fetched_and_to_review(arena, values):
@@ -1075,7 +1091,7 @@ def test_review_json(arena):
     document = review_document()
 
     assert document["version"] == 1
-    assert document["summary"] == {"needs_review": 1, "waiting_on_budget": 0}
+    assert document["summary"] == {"needs_review": 1, "waiting": 0}
     assert document["needs_review"] == [
         {
             "card_id": "card_sp_2",
@@ -1155,12 +1171,12 @@ def test_review_help_lists_its_options():
         assert option in text
 
 
-# --- arena review: cards waiting on budget -------------------------------------------
+# --- arena review: waiting cards ---------------------------------------------------
 
 
 def budget_for_two(values) -> None:
-    """PokéPrice can quote two cards, then its budget runs out: the Grail
-    card and Gold Football's card are valued, the other three wait."""
+    """PokéPrice can quote two cards, then its budget runs out: Silver
+    Pokemon's two cards are valued, the other three wait."""
     values.budget = CreditBudget(values.cache, {"pokeprice": 2}, clock=Clock(NOW))
     values.providers = [
         FakeProvider(
@@ -1172,30 +1188,30 @@ def budget_for_two(values) -> None:
     ]
 
 
-def test_review_lists_cards_waiting_on_budget_in_their_own_section(
-    arena, values, config_dir
-):
+def test_review_lists_cards_waiting_in_their_own_section(arena, values, config_dir):
     no_overrides(config_dir)
     budget_for_two(values)
 
     stdout = plain(review().stdout)
 
-    assert "Waiting on budget" in stdout
-    for card_id in ["card_gp_base", "card_sp_1", "card_sp_2"]:
+    assert "Waiting" in [line.strip() for line in stdout.splitlines()]
+    assert "Waiting on budget" not in stdout
+    for card_id in ["card_gf_1", "card_gp_hit", "card_gp_base"]:
         assert card_id in stdout
     assert "budget exhausted" in stdout
-    assert stdout.rstrip().endswith("0 cards need review, 3 waiting on budget")
+    assert stdout.rstrip().endswith("0 cards need review, 3 waiting")
 
 
-def test_cards_waiting_on_budget_are_left_out_of_the_snippet(arena, values, config_dir):
+def test_cards_waiting_are_left_out_of_the_snippet(arena, values, config_dir):
     no_overrides(config_dir)
     budget_for_two(values)
 
     stdout = plain(review().stdout)
 
     assert "market_value" not in stdout
+    assert '["11111111"]' not in stdout
     assert '["22222222"]' not in stdout
-    assert '["card_sp_1"]' not in stdout
+    assert '["card_gf_1"]' not in stdout
 
 
 def test_a_temporarily_unavailable_source_puts_cards_in_waiting(arena, values):
@@ -1204,7 +1220,7 @@ def test_a_temporarily_unavailable_source_puts_cards_in_waiting(arena, values):
     document = review_document()
 
     assert document["needs_review"] == []
-    assert [e["card_id"] for e in document["waiting_on_budget"]] == ["card_sp_2"]
+    assert [e["card_id"] for e in document["waiting"]] == ["card_sp_2"]
 
 
 def test_a_missing_key_still_puts_cards_up_for_review(arena, values):
@@ -1213,7 +1229,7 @@ def test_a_missing_key_still_puts_cards_up_for_review(arena, values):
     document = review_document()
 
     assert [e["card_id"] for e in document["needs_review"]] == ["card_sp_2"]
-    assert document["waiting_on_budget"] == []
+    assert document["waiting"] == []
 
 
 def test_the_snippet_header_says_to_fill_in_or_delete_each_entry(arena):

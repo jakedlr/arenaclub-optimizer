@@ -294,7 +294,7 @@ def review(
     else:
         console.print("No cards need review.")
     if waiting:
-        console.print(review_table(waiting, title="Waiting on budget"))
+        console.print(review_table(waiting, title="Waiting"))
         console.print(
             Text(
                 "These cards weren't looked up: a value source's budget ran out "
@@ -352,10 +352,16 @@ def _value(
     fetched: FetchResult, config: Config, overrides: Overrides, errors: Console
 ) -> ValueResolution:
     """Resolve the Market Values of every card `rank` would evaluate, in one
-    pass. Exits 1 if the value cache can't be used."""
+    pass, a Slab Pack at a time. Exits 1 if the value cache can't be used."""
     try:
         with make_value_sources() as sources, _spinner(errors, "Valuing cards…"):
-            return value_packs(fetched.packs, config.filters, overrides, sources)
+            return value_packs(
+                fetched.packs,
+                config.filters,
+                overrides,
+                sources,
+                coverage_threshold=config.coverage_threshold,
+            )
     except (OSError, sqlite3.Error) as error:
         _fail(f"Error: could not use the value cache: {error}", 1)
 

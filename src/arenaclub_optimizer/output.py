@@ -14,7 +14,6 @@ from rich.text import Text
 
 from arenaclub_optimizer.config import Config
 from arenaclub_optimizer.model import ChecklistCard
-from arenaclub_optimizer.providers import cardvolume
 from arenaclub_optimizer.ranking import (
     RankedPack,
     RankingReport,
@@ -24,6 +23,7 @@ from arenaclub_optimizer.ranking import (
 )
 from arenaclub_optimizer.valuation import ReviewEntry
 from arenaclub_optimizer.values import ValueOrigin, ValueQuote, ValueResolution
+from arenaclub_optimizer.values.attribution import citation
 
 __all__ = [
     "JSON_VERSION",
@@ -99,25 +99,15 @@ def summary_line(report: RankingReport) -> str:
 
 def source_lines(report: RankingReport) -> tuple[str, ...]:
     """The citation of each Value Quote behind the Top Results, once each, in
-    Top Results and Checklist order. CardVolume's terms ask for one wherever
-    its figures are used, so a CardVolume quote without one (which its
-    provider never makes) is still attributed to CardVolume. Any other quote
-    without a citation adds nothing."""
+    Top Results and Checklist order (see `values.attribution.citation`). A
+    quote that needs no citation adds nothing."""
     quotes = (
         report.values.values.get(card.card_id)
         for result in report.results
         for card in result.pack.checklist
     )
-    citations = (_citation(q) for q in quotes if q is not None)
+    citations = (citation(q) for q in quotes if q is not None)
     return tuple(dict.fromkeys(c for c in citations if c))
-
-
-def _citation(quote: ValueQuote) -> str | None:
-    if quote.citation:
-        return quote.citation
-    if quote.source == cardvolume.NAME:
-        return f"CardVolume, {cardvolume.SITE_URL}/"
-    return None
 
 
 def unavailable_lines(values: ValueResolution) -> tuple[str, ...]:
@@ -200,12 +190,12 @@ def report_json(report: RankingReport, config: Config) -> dict[str, Any]:
 
 
 def review_summary(entries: Sequence[ReviewEntry]) -> str:
-    """E.g. "3 cards need review", with ", 2 waiting on budget" when some
-    cards are only waiting for a later run."""
+    """E.g. "3 cards need review", with ", 2 waiting" when some cards are
+    only waiting for a later run."""
     waiting = sum(entry.waiting for entry in entries)
     n = len(entries) - waiting
     text = f"{n} card needs review" if n == 1 else f"{n} cards need review"
-    return f"{text}, {waiting} waiting on budget" if waiting else text
+    return f"{text}, {waiting} waiting" if waiting else text
 
 
 def review_table(
@@ -259,7 +249,7 @@ def review_json(
 ) -> dict[str, Any]:
     """The Needs-review List as a JSON-ready dict, with the `config` whose
     filters chose the Slab Packs. Cards that are `waiting` are listed under
-    `waiting_on_budget` instead of `needs_review`."""
+    `waiting` instead of `needs_review`."""
     entries = list(entries)
     review = [_review_row(e) for e in entries if not e.waiting]
     waiting = [_review_row(e) for e in entries if e.waiting]
@@ -267,9 +257,9 @@ def review_json(
         "version": REVIEW_JSON_VERSION,
         "generated_at": generated_at.isoformat(),
         "settings": _settings_json(config),
-        "summary": {"needs_review": len(review), "waiting_on_budget": len(waiting)},
+        "summary": {"needs_review": len(review), "waiting": len(waiting)},
         "needs_review": review,
-        "waiting_on_budget": waiting,
+        "waiting": waiting,
         "unavailable_sources": dict(unavailable),
     }
 
