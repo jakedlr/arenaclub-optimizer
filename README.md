@@ -10,8 +10,8 @@ For each Slab Pack it works out the **expected value** (EV) of one Rip: what you
 
 ## Contents
 
-1. [Key terms](#key-terms)
-2. [Setup (one time)](#setup-one-time)
+1. [Setup (one time)](#setup-one-time)
+2. [Key terms](#key-terms)
 3. [Quick start](#quick-start)
 4. [Commands](#commands)
    - [`arena rank`](#arena-rank): rank the packs
@@ -28,6 +28,51 @@ For each Slab Pack it works out the **expected value** (EV) of one Rip: what you
 12. [JSON output](#json-output)
 13. [Troubleshooting](#troubleshooting)
 14. [For developers](#for-developers)
+
+---
+
+## Setup (one time)
+
+You need a terminal on Linux or macOS. On Windows, first install WSL (Windows Subsystem for Linux): open PowerShell as administrator, run `wsl --install`, restart, and then use the "Ubuntu" app as your terminal. You also need `git`. Check by running `git --version`; on Ubuntu/WSL, install it with `sudo apt install git` if it's missing.
+
+Every command below is typed into that terminal, one line at a time. Press Enter after each.
+
+**1. Install uv.** uv runs the tool and installs Python for you.
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen the terminal afterwards so the `uv` command is found.
+
+**2. Download the tool and install its dependencies.**
+
+```sh
+git clone https://github.com/jakedlr/arenaclub-optimizer.git
+cd arenaclub-optimizer
+uv sync
+```
+
+`uv sync` installs the right Python version (3.14) and everything else the tool needs. **Run every `uv run arena …` command from inside this `arenaclub-optimizer` folder.**
+
+**3. Get a free price key (strongly recommended).** Without it, the tool can only price the few dozen famous Pokémon cards that CardVolume lists, and almost no pack will reach the 95% Value Coverage it needs to be ranked.
+
+1. Sign up for a free account at [pokemonpricetracker.com](https://www.pokemonpricetracker.com) and copy your API key. The free tier is for personal use, which this is.
+2. Still in the `arenaclub-optimizer` folder, run this line. Replace `paste-your-key-here` with your key and keep the quotes:
+
+   ```sh
+   (umask 077; echo 'POKEPRICE_API_KEY=paste-your-key-here' > .env)
+   ```
+
+   This creates a file named `.env` that only you can read. It is never uploaded to GitHub. Don't share your key or paste it anywhere public.
+
+**4. Check it works.**
+
+```sh
+uv run arena --help
+```
+
+This should list the commands `rank`, `review`, `topic` and `watch`. To print the installed version, run `uv run arena --version`.
 
 ---
 
@@ -56,49 +101,6 @@ For each Slab Pack it works out the **expected value** (EV) of one Rip: what you
 
 ---
 
-## Setup (one time)
-
-You need a terminal on Linux, macOS or Windows (WSL). Every command below goes into that terminal.
-
-**1. Install uv.** uv runs the tool and installs Python for you.
-
-```sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Close and reopen the terminal afterwards so the `uv` command is found.
-
-**2. Download the tool and install its dependencies.**
-
-```sh
-git clone https://github.com/jakedlr/arenaclub-optimizer.git
-cd arenaclub-optimizer
-uv sync
-```
-
-`uv sync` installs the right Python version (3.14) and everything else the tool needs. **Run every `uv run arena …` command from inside this `arenaclub-optimizer` folder.**
-
-**3. Get a free price key (strongly recommended).** Without it, the tool can only price a few dozen famous cards, and almost no pack will reach the 95% Value Coverage it needs to be ranked.
-
-1. Sign up for a free account at [pokemonpricetracker.com](https://www.pokemonpricetracker.com) and copy your API key. The free tier is for personal use, which this is.
-2. In the `arenaclub-optimizer` folder, create a file named `.env` containing one line:
-
-   ```
-   POKEPRICE_API_KEY=paste-your-key-here
-   ```
-
-   The `.env` file is never uploaded to GitHub. Don't share your key or paste it anywhere public.
-
-**4. Check it works.**
-
-```sh
-uv run arena --help
-```
-
-This should list the commands `rank`, `review`, `topic` and `watch`. To print the installed version, run `uv run arena --version`.
-
----
-
 ## Quick start
 
 ```sh
@@ -116,7 +118,9 @@ uv run arena topic --test
 uv run arena watch --category pokemon --price-max 150
 ```
 
-**On your first day, expect "0 ranked".** The tool needs prices for nearly every card in a pack before it ranks that pack. The free price key covers about 13–17 new cards a day, so the first pack is usually ranked after about 4–5 days. Each run carries on where the last one stopped. [Why it works this way](#where-prices-come-from-and-why-ranking-takes-days), and [how to speed it up](#manual-overrides-setting-prices-yourself).
+**On your first day, expect "0 ranked".** The tool needs prices for nearly every card in a pack before it ranks that pack. The free price key covers about 13 new cards a day, so the first pack is usually ranked on about the fifth day. Each run carries on where the last one stopped.
+
+**Mostly Pokémon.** The free price source only covers Pokémon cards. Football, basketball and other non-Pokémon packs will almost never be ranked unless you price their cards yourself with Manual Overrides. [Why it works this way](#where-prices-come-from-and-why-ranking-takes-days), and [how to speed it up](#manual-overrides-setting-prices-yourself).
 
 **The first run for a Category takes several minutes.** The tool waits 1 second between requests to Arena Club so it never overloads the site. It also saves card details on your computer, so later runs are much faster.
 
@@ -139,8 +143,8 @@ uv run arena rank [OPTIONS]
 | Option | What it does | Default |
 |---|---|---|
 | `--category NAME` | Only include this Category, e.g. `pokemon`, `football`, `"one piece"`. Capital letters and accents don't matter. Repeat the option for several: `--category pokemon --category football`. | All Categories |
-| `--price-min DOLLARS` | Only include packs whose list price is at least this, e.g. `--price-min 50`. | No minimum |
-| `--price-max DOLLARS` | Only include packs whose list price is at most this, e.g. `--price-max 150`. A price range also makes the run faster, because price tiers outside it are never downloaded. | No maximum |
+| `--price-min DOLLARS` | Only include packs whose list price is at least this, e.g. `--price-min 50`. 0 or more. | No minimum |
+| `--price-max DOLLARS` | Only include packs whose list price is at most this, e.g. `--price-max 150`. Must not be below `--price-min`. A price range also makes the run faster, because price tiers outside it are never downloaded. | No maximum |
 | `--min-ev PERCENT` | Only show packs whose Buyback EV % is at least this. Write it as a plain percentage: `--min-ev 5` means 5%. It can be negative: `--min-ev -10` keeps packs losing at most 10% on average. | No minimum |
 | `--min-p-profit PERCENT` | Only show packs where the chance of a single Rip paying for itself is at least this, from 0 to 100: `--min-p-profit 20` means 20%. | No minimum |
 | `--exclude-high-variance` | Hide packs that carry a High-variance Note (see [Key terms](#key-terms)). | Shown |
@@ -156,7 +160,7 @@ uv run arena rank [OPTIONS]
 ```sh
 uv run arena rank --category pokemon
 uv run arena rank --category pokemon --price-max 100 --min-p-profit 25 --exclude-high-variance
-uv run arena rank --category football --category basketball --top 5 --wide
+uv run arena rank --category pokemon --category "one piece" --top 5 --wide
 uv run arena rank --k 1.2 --json > results.json
 ```
 
@@ -230,7 +234,7 @@ It takes the same filters as `rank`, plus three of its own:
 | `--k RATIO` | As in `rank`. | 1 |
 | `--interval MINUTES` | Minutes between checks, at least 5. Each wait varies randomly by up to 10%, so requests don't land at exactly the same time every cycle. | 10 |
 | `--once` | Run a single check and stop. Useful for testing your filters. | Off |
-| `--quiet` | Only print a line when a check fails. Useful when it runs in the background. | Off |
+| `--quiet` | Only print a line when a check fails. Useful when it runs in the background. The Topic is still printed once at start. | Off |
 | `--help` | Show the options and exit. | |
 
 There is no `--top`: every pack that meets your criteria can trigger an Alert, not just the top 10.
@@ -251,20 +255,26 @@ At start it prints your Topic and Subscribe URL. After each check it prints one 
 
 **When you get an Alert:**
 
-- **New Top Result:** a pack newly meets your criteria. The Alert shows its Buyback EV %, the dollar amount, P(profit) and any High-variance Note.
-- **Improved:** a pack you were already alerted about has climbed at least 5 percentage points of Buyback EV % since that Alert.
-- **Problem / Recovered:** checks started failing (Arena Club blocking requests, network trouble, or the price cache broken), and later, when they work again. You get one Alert when the problem starts and one when it ends, not one per check.
+- **"New Top Result: \<pack\>"** means a pack newly meets your criteria. The Alert shows its Buyback EV %, the dollar amount, P(profit) and any High-variance Note.
+- **"Buyback EV up: \<pack\>"** means a pack you were already alerted about has climbed at least 5 percentage points of Buyback EV % since that Alert.
+- **Problem Alerts** mean checks have started failing. The title says which kind:
+  - "Arena Club is blocking requests"
+  - "Arena Club requests are failing"
+  - "Most Slab Packs could not be fetched"
+  - "Watch Mode can't use its value cache"
+
+  **"Watch Mode recovered"** follows when checks work again. You get one problem Alert when the trouble starts and one recovery Alert when it ends, not one per check.
 
 **When you don't get an Alert:** a pack that stays in your results doesn't re-alert every 10 minutes. A pack that briefly drops out isn't announced again when it comes back, as long as it returns within 24 hours. That covers dropping out because Arena Club swapped in a card that has no price yet, or because a check couldn't download it. A pack that drops out because it really fell below your criteria (e.g. its EV dropped under `--min-ev`) *is* announced again if it returns.
 
-**When checks fail**, Watch Mode waits longer before trying again: one interval, then twice as long each time, up to 2 hours, or longer if Arena Club asks for more. It goes back to the normal interval after a successful check.
+**When checks fail**, Watch Mode waits longer before trying again. After the first failure it waits the normal interval, then twice as long after each further failure, up to 2 hours. If Arena Club asks it to wait longer, it does. It goes back to the normal interval after a successful check.
 
 Watch Mode reads the config file and Manual Overrides only when it starts. **Restart it after you change them.** To keep it running after you close the terminal, see [Running Watch Mode in the background](#running-watch-mode-in-the-background).
 
 **Things to know:**
 
 - If ntfy itself is down, the Alert is retried on the next check, so very occasionally one arrives twice.
-- If ntfy is down for a whole outage, you won't get the Problem or Recovered Alert for it.
+- If ntfy is down for a whole outage, you won't get the problem or recovery Alert for it.
 
 ---
 
@@ -273,10 +283,11 @@ Watch Mode reads the config file and Manual Overrides only when it starts. **Res
 Example (`uv run arena rank --category pokemon`):
 
 ```
+                                  Top Results
                              Buyback   Buyback                              Top-
 Slab Pack            Price      EV %      EV $   P(profit)   median×   heaviness
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Silver Pokémon      $50.00     +3.1%     $1.55       34.0%     0.71×          8%
+Silver Pokémon      $50.00     +3.1%    +$1.55       34.0%     0.71×          8%
 Gold Pokémon       $100.00     -6.2%    -$6.20       22.0%     0.58×         41%
         Buyback EV is an estimate: AC Value = k × Market Value, k = 1.
 Notes:
@@ -316,10 +327,10 @@ returns 0.58× your cost.
 - **Skipped** lines name packs that couldn't be evaluated this run, with the reason. Buyback might be disabled for that pack, or its Hit Rates might be inconsistent.
 - **Sources** lists the CardVolume pages behind any prices shown, as CardVolume's terms require.
 - **The summary line** counts:
-  - **ranked:** shown, or met your criteria
+  - **ranked:** packs shown in the table, at most `--top`. In Watch Mode's line it is every pack that met your criteria.
   - **unrankable:** below 95% Value Coverage, so not ranked yet
   - **skipped:** couldn't be evaluated
-  - **values:** where the card prices came from. "from cache" means saved from earlier runs, "fetched" means looked up now, and "need review" means still missing.
+  - **values:** where the card prices came from. "overridden" (shown only when you have Manual Overrides) means your own prices, "from cache" means saved from earlier runs, "fetched" means looked up now, and "need review" means still missing.
 
 ---
 
@@ -329,19 +340,19 @@ Each card's Market Value comes from the first of these that has one:
 
 1. **Your Manual Overrides**: prices you set. These always win.
 2. **PokéPrice Tracker**: Pokémon cards, using your free key. It covers PSA, CGC, BGS, SGC, TAG and ACE grades.
-3. **CardVolume**: free and needs no key, but it only lists a couple of hundred well-known cards.
+3. **CardVolume**: free and needs no key, but it lists only about two hundred famous cards across all games, and only a few dozen of them are Pokémon.
 
 Prices are saved on your computer and reused for 7 days before they're looked up again.
 
-**Why packs take days to rank.** The free PokéPrice key gives 100 credits a day, and it resets at midnight UTC. Looking a card up the first time costs about 6–8 credits, and a card the tool has already identified costs 1–2 to refresh. That works out to roughly 13–17 new cards a day. A typical pack has about 60 cards. Common Lineup cards make up about 98% of the pull chances, so a pack can't reach 95% Value Coverage until nearly all of them are priced.
+**Why packs take days to rank.** The free PokéPrice key gives 100 credits a day, and it resets at midnight UTC. Looking a card up the first time costs 7–8 credits (6–7 for a card graded by Arena Club), and refreshing a card the tool has already identified costs 2 (1). That works out to roughly 13 new cards a day. It's a few more on days when some lookups fail early, because those cost only 1–2 credits. A typical pack has about 60 cards. Common Lineup cards make up about 98% of the pull chances, so a pack can't reach 95% Value Coverage until nearly all of them are priced.
 
 To get packs ranked as soon as possible, the tool spends credits **one pack at a time**:
 
 - **Cheapest pack first.** Each pack is finished before the next one starts.
 - **Rarest cards first within a pack:** Grail, then Chase, then Lineup.
-- **Already-rankable packs go to the back of the queue**, along with packs whose Hit Rates are broken. A card shared by several packs is looked up once.
+- **Already-rankable packs go to the back of the queue.** Packs whose Hit Rates are broken get no credits at all. A card shared by several packs is looked up once.
 
-With the free key, expect your first pack to be ranked after about **4–5 days**, then about one more every 4–5 days. To speed up a particular pack, narrow `--category` and the price range to it, or price its cards yourself with Manual Overrides.
+With the free key, expect your first pack to be ranked on about **the fifth day**, then about one more every 5 days. Later packs come a little slower, because prices are refreshed weekly and those refreshes use some of each day's credits. To speed up a particular pack, narrow `--category` and the price range to it, or price its cards yourself with Manual Overrides.
 
 **Cards no source can price.** Some cards PokéPrice can't find, such as some older Japanese sets, and the tool never prices cards graded by Arena Club itself directly. A card graded by Arena Club gets its ungraded price, marked low confidence. If a pack still can't reach 95% because of unpriced cards, it keeps getting first call on credits each month when the "not found" answers expire. Run `arena review` and price those cards yourself to unblock it.
 
@@ -357,7 +368,7 @@ A Manual Override sets a card's Market Value to a number you choose, for example
 uv run arena review --category pokemon --price-max 100
 ```
 
-**2. Create the overrides file** if you don't have one yet:
+**2. Create the overrides file** if you don't have one yet. It's a plain text file in TOML format: `[name]` lines start an entry, and `key = value` lines set its fields.
 
 ```sh
 mkdir -p ~/.config/arenaclub-optimizer
@@ -389,13 +400,13 @@ mkdir -p ~/.config/arenaclub-optimizer
 cp docs/config.example.toml ~/.config/arenaclub-optimizer/config.toml
 ```
 
-Then edit `~/.config/arenaclub-optimizer/config.toml` in any text editor. Every setting, with its default:
+Then edit `~/.config/arenaclub-optimizer/config.toml` in any text editor, for example with `nano ~/.config/arenaclub-optimizer/config.toml` (save with Ctrl+O, exit with Ctrl+X). A `#` starts a comment, so remove it from a line to turn that setting on. Every setting, with its default:
 
 | Setting | Meaning | Default |
 |---|---|---|
 | `k` | AC Value ÷ Market Value (see [Key terms](#key-terms)). More than 0. | `1.0` |
 | `payment_method` | How you pay for Rips: `"wallet"` (no fee), `"ach"` (0.8%, max $5) or `"card"` (2.9% + $0.30). It is added to your Cost. | `"wallet"` |
-| `tax_rate` | Sales tax on a Rip, as a fraction: `0.0775` means 7.75%. | `0.0` |
+| `tax_rate` | Sales tax on a Rip, as a fraction from 0 up to (not including) 1: `0.0775` means 7.75%. | `0.0` |
 | `coverage_threshold` | Value Coverage a pack needs before it's ranked, from 0 to 1. Lowering it ranks packs sooner, but on less reliable numbers. | `0.95` |
 | `p_profit_threshold` | A High-variance Note is added when P(profit) is below this. | `0.25` |
 | `top_heaviness_threshold` | …or when Top-heaviness is above this. | `0.5` |
@@ -413,6 +424,8 @@ Then edit `~/.config/arenaclub-optimizer/config.toml` in any text editor. Every 
 
 A mistake in the file, such as a misspelled setting or a value out of range, stops the tool with a message naming the setting. Nothing is silently ignored.
 
+The 90% Buyback rate and the 80% Slab Safe guarantee aren't settings. They come from each pack's own Arena Club data, and those figures are only the usual values.
+
 ---
 
 ## Running Watch Mode in the background
@@ -423,7 +436,7 @@ A mistake in the file, such as a misspelled setting or a value out of range, sto
 
 ### Option A: `nohup` (simplest)
 
-From the `arenaclub-optimizer` folder, paste this whole block. Change the filters on the `nohup` line to what you want watched.
+From the `arenaclub-optimizer` folder, paste this whole block. Change the filters on the `nohup` line to what you want watched. The `umask 077` and `chmod` lines make the folder and log file readable only by you.
 
 ```sh
 (
@@ -441,7 +454,16 @@ From the `arenaclub-optimizer` folder, paste this whole block. Change the filter
 
 ### Option B: systemd user service (starts automatically)
 
-Follow the steps at the top of [`docs/arena-watch.service`](docs/arena-watch.service). In short: copy it to `~/.config/systemd/user/`, set the folder and filters in it, then run `systemctl --user enable --now arena-watch`.
+The full instructions are at the top of [`docs/arena-watch.service`](docs/arena-watch.service). In short:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp docs/arena-watch.service ~/.config/systemd/user/
+nano ~/.config/systemd/user/arena-watch.service   # set WorkingDirectory and the filters on ExecStart
+systemctl --user daemon-reload
+systemctl --user enable --now arena-watch
+loginctl enable-linger                            # optional: keep it running while you're logged out
+```
 
 - **See what it's doing:** `journalctl --user -u arena-watch -f`
 - **Stop it:** `systemctl --user stop arena-watch`
@@ -462,25 +484,27 @@ Windows may shut WSL down when no WSL terminal window is open, and that stops Wa
 | `~/.config/arenaclub-optimizer/config.toml` | Your settings. You create this. | Defaults are used |
 | `~/.config/arenaclub-optimizer/overrides.toml` | Your Manual Overrides. You create this. | Your prices are lost |
 | `~/.cache/arenaclub-optimizer/cards/` | Saved Arena Club card details | Yes; they're re-downloaded slowly |
-| `~/.cache/arenaclub-optimizer/values.sqlite` | Saved prices, plus today's credit count | Yes, but every price is looked up again, using credits |
+| `~/.cache/arenaclub-optimizer/cardvolume-cards.json` | CardVolume's list of the cards it prices | Yes; it's downloaded again on the next run |
+| `~/.cache/arenaclub-optimizer/values.sqlite` (plus `values.sqlite-wal` and `values.sqlite-shm`) | Saved prices, plus today's credit count | Yes, but delete all three together, and every price is then looked up again, using credits |
 | `~/.local/state/arenaclub-optimizer/topic` | Your generated Topic | Deleting it gives you a new Topic, and you must re-subscribe |
 | `~/.local/state/arenaclub-optimizer/alerts.json` | What you've already been alerted about | Yes; current packs alert again once |
+| `~/.local/state/arenaclub-optimizer/alerts.json.corrupt-<date>` | A damaged `alerts.json` set aside for inspection | Yes |
 
-If you've set `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` or `XDG_STATE_HOME`, those folders are used instead of `~/.config`, `~/.cache` and `~/.local/state`.
+Advanced: if you've set the `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` or `XDG_STATE_HOME` environment variables to absolute paths, those folders are used instead of `~/.config`, `~/.cache` and `~/.local/state`. Most people haven't, so you can ignore this.
 
 ---
 
 ## Exit codes
 
-Each command sets an exit code when it finishes, for use in scripts.
+When a command finishes it reports a number called its exit code: 0 means success, anything else means something went wrong. You only need this if you call the tool from your own scripts. To see the code of the last command, run `echo $?`.
 
 | Code | `rank` / `review` | `topic` | `watch --once` |
 |---|---|---|---|
 | `0` | Success | Success | The check went fine, or you stopped it |
-| `1` | Arena Club couldn't be reached or answered with an error | The Topic file couldn't be saved, or `--test` failed | The check failed for another reason |
-| `2` | Arena Club blocked a request (HTTP 403/429), or an option or the config/overrides file is invalid | The config file is invalid | Arena Club blocked a request |
+| `1` | Arena Club couldn't be reached or answered with an error, or the saved-prices file (`values.sqlite`) couldn't be used | The Topic file couldn't be saved, or `--test` failed | The check failed for another reason (network error, most packs couldn't be downloaded, or the saved-prices file couldn't be used), or the Topic file couldn't be saved |
+| `2` | Arena Club blocked a request (it answered "forbidden" or "too many requests", HTTP 403/429), or an option or the config/overrides file is invalid | The config file is invalid | Arena Club blocked a request, or an option or the config/overrides file is invalid |
 
-`watch` without `--once` keeps running through failures (backing off as described above) and exits 0 when you stop it.
+`watch` without `--once` keeps running through failures (backing off as described above) and exits 0 when you stop it. Like `--once`, it exits 2 at start if an option or the config/overrides file is invalid, and 1 if it can't save the Topic file.
 
 ---
 
@@ -505,7 +529,7 @@ Each command sets an exit code when it finishes, for use in scripts.
 | `0 ranked, N unrankable` | Normal for the first few days: those packs don't have 95% of their cards priced yet. Keep running `rank` or `watch` daily, or add [Manual Overrides](#manual-overrides-setting-prices-yourself). |
 | `Value source unavailable: pokeprice (PokéPrice key not set)` | The `.env` file is missing, misspelled, or not in the folder you ran the command from. See [Setup step 3](#setup-one-time). |
 | `budget exhausted, retry after … 00:00 UTC` | Today's 100 free credits are used up. Run again after midnight UTC. |
-| Arena Club blocked a request (exit code 2) | Arena Club is refusing requests for now. Wait a while and try again. The tool deliberately doesn't try to get around this. |
+| Arena Club blocked a request (HTTP 403 or 429) | Arena Club is refusing requests for now. Wait a while and try again. The tool deliberately doesn't try to get around this. |
 | `market_value is required` | An entry in `overrides.toml` has no price. Fill it in or delete the entry. |
 | Error naming a config setting | That setting in `config.toml` is misspelled or out of range; the message says which. |
 | No test notification arrives | Check that the Topic in the ntfy app exactly matches `uv run arena topic`, and that the app allows notifications. |
