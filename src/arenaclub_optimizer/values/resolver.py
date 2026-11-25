@@ -8,7 +8,7 @@ the rules are in ADR 0002 and docs/plan.md (Values).
 import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -29,7 +29,6 @@ from arenaclub_optimizer.values.quote import (
     QuoteResult,
     ValueProvider,
     ValueQuote,
-    format_utc,
     require_aware,
 )
 
@@ -38,6 +37,8 @@ UNMATCHED_BY_ALL = "unmatched by all providers"
 NO_PRICE_AT_GRADE = "no price at grade"
 NO_RAW_PRICE = "no raw price"
 NO_PROVIDERS = "no value providers"
+# The oldest stale quote the resolver falls back on.
+DEFAULT_STALE_MAX_AGE = timedelta(days=30)
 
 
 class ValueOrigin(StrEnum):
@@ -46,8 +47,8 @@ class ValueOrigin(StrEnum):
     OVERRIDE = "override"
     CACHE = "cache"
     FETCHED = "fetched"
-    # A stale cached quote, kept because no provider could be asked for a
-    # fresh one (budget exhausted or provider unavailable).
+    # Low confidence; refresh pending. A stale cached quote from a provider
+    # that couldn't be asked this run (budget exhausted or unavailable).
     STALE_CACHE = "stale_cache"
 
 
@@ -84,27 +85,41 @@ def resolve_values(
     cache: ValueCache,
     budget: CreditBudget,
     now: datetime | None = None,
+    *,
+    stale_max_age: timedelta = DEFAULT_STALE_MAX_AGE,
 ) -> ValueResolution:
     """Find a Market Value for each card, in card order, each card id once.
+
+    Call it once per run, with every card to value in priority order (the
+    cards that matter most first). A provider that raises ProviderUnavailable
+    is not asked again within the call, and a limited budget is spent on the
+    cards that come first; calling once per pack would ask a provider that is
+    down again for every pack.
 
     For each card, the first of these wins:
     1. its Manual Override (source "override", high confidence);
     2. a fresh cached quote from one of `providers`, in provider order;
     3. each provider in turn, skipping one with a fresh cached NotFound or
-       Unmatched, one that raised ProviderUnavailable earlier in the run, and
-       one whose `credit_cost` the budget can't cover. Every answer is cached.
-    A card without a value then falls back to a stale cached quote if any
-    provider was skipped for budget or unavailability, and otherwise goes on
-    the Needs-review List with the reason.
+       Unmatched, one that raised ProviderUnavailable earlier in the call,
+       and one whose `credit_cost` the budget can't cover. Every answer is
+       cached;
+    4. a stale cached quote, at most `stale_max_age` old, from a provider
+       skipped in step 3 for budget or unavailability, returned at low
+       confidence (the cached row is left as it is). A provider that
+       answered NotFound or Unmatched has replaced its stale quote.
+    A card still without a value goes on the Needs-review List with the
+    reason.
 
     A card graded by Arena Club is looked up raw (grader and grade None) and
     its quote marked low confidence, since no provider prices Arena Club
-    grades. `now` (time-zone aware) defaults to the current time.
+    grades. `now` (time-zone aware) defaults to `budget`'s clock, which the
+    providers' spending also uses; pass a different `now` only with a budget
+    whose clock agrees.
 
     Raises ValueError if a provider returns a quote whose source isn't its name.
     """
-    now = datetime.now(UTC) if now is None else require_aware(now, "now")
-    run = _Run(providers, overrides, cache, budget, now)
+    now = budget.now() if now is None else require_aware(now, "now")
+    run = _Run(providers, overrides, cache, budget, now, stale_max_age)
     seen: set[str] = set()
     for card in cards:
         if card.card_id not in seen:
@@ -143,6 +158,17 @@ def is_arena_club_graded(identity: CardIdentity) -> bool:
     return grader is not None and grader.casefold() == ARENA_CLUB_GRADER
 
 
+@dataclass
+class _Asked:
+    """What asking the providers for one card came to."""
+
+    quote: ValueQuote | None = None
+    # Each provider's (name, cause) for not quoting, in provider order.
+    causes: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    # Providers that couldn't be asked (budget exhausted or unavailable).
+    skipped: list[str] = dataclasses.field(default_factory=list)
+
+
 class _Run:
     """The state of one `resolve_values` call."""
 
@@ -153,12 +179,14 @@ class _Run:
         cache: ValueCache,
         budget: CreditBudget,
         now: datetime,
+        stale_max_age: timedelta,
     ) -> None:
         self.providers = providers
         self.overrides = overrides
         self.cache = cache
         self.budget = budget
         self.now = now
+        self.stale_max_age = stale_max_age
         self.values: dict[str, ValueQuote] = {}
         self.origins: dict[str, ValueOrigin] = {}
         self.needs_review: list[NeedsReview] = []
@@ -181,46 +209,42 @@ class _Run:
             p.name: self.cache.get(card.card_id, p.name, now=self.now)
             for p in self.providers
         }
-        cached = _first_quote(entries.values(), fresh_only=True)
-        if cached is not None:
-            self._found(card, cached, ValueOrigin.CACHE)
+        for entry in entries.values():
+            if entry is not None and entry.fresh and _is_quote(entry):
+                self._found(card, entry.result, ValueOrigin.CACHE)
+                return
+
+        asked = self._ask_providers(card, entries)
+        if asked.quote is not None:
+            self._found(card, asked.quote, ValueOrigin.FETCHED)
             return
 
-        fetched, causes, asked_all = self._ask_providers(card, entries)
-        if fetched is not None:
-            self._found(card, fetched, ValueOrigin.FETCHED)
-            return
-
-        stale = None if asked_all else _first_quote(entries.values(), fresh_only=False)
+        stale = self._stale_fallback(entries[name] for name in asked.skipped)
         if stale is not None:
-            self._found(card, stale, ValueOrigin.STALE_CACHE)
+            low = dataclasses.replace(stale, confidence=ValueConfidence.LOW)
+            self._found(card, low, ValueOrigin.STALE_CACHE)
             return
         self.needs_review.append(
-            NeedsReview(card.card_id, card.cert_number, card.label, _reason(causes))
+            NeedsReview(
+                card.card_id, card.cert_number, card.label, _reason(asked.causes)
+            )
         )
 
     def _ask_providers(
         self, card: ChecklistCard, entries: Mapping[str, CacheEntry | None]
-    ) -> tuple[ValueQuote | None, list[tuple[str, str]], bool]:
-        """Ask each provider in turn until one quotes, caching every answer.
-
-        Returns the quote (or None), each provider's (name, cause) for not
-        quoting, and whether every provider gave an answer, fresh from the
-        cache or from asking; False when one was skipped for budget or
-        unavailability.
-        """
+    ) -> _Asked:
+        """Ask each provider in turn until one quotes, caching every answer."""
         raw = is_arena_club_graded(card.identity)
         identity = (
             dataclasses.replace(card.identity, grader=None, grade=None)
             if raw
             else card.identity
         )
-        causes: list[tuple[str, str]] = []
-        asked_all = True
+        asked = _Asked()
         for provider in self.providers:
             entry = entries[provider.name]
             if entry is not None and entry.fresh:
-                causes.append((provider.name, _negative_cause(entry.result, raw)))
+                asked.causes.append((provider.name, _negative_cause(entry.result, raw)))
                 continue
             skip = self._cannot_ask(provider)
             if skip is None:
@@ -230,16 +254,17 @@ class _Run:
                     self.unavailable[provider.name] = error
                     skip = str(error)
             if skip is not None:
-                causes.append((provider.name, skip))
-                asked_all = False
+                asked.causes.append((provider.name, skip))
+                asked.skipped.append(provider.name)
                 continue
             if isinstance(result, ValueQuote) and raw:
                 result = dataclasses.replace(result, confidence=ValueConfidence.LOW)
             self.cache.put(card.card_id, provider.name, result, fetched_at=self.now)
             if isinstance(result, ValueQuote):
-                return result, causes, asked_all
-            causes.append((provider.name, _negative_cause(result, raw)))
-        return None, causes, asked_all
+                asked.quote = result
+                return asked
+            asked.causes.append((provider.name, _negative_cause(result, raw)))
+        return asked
 
     def _cannot_ask(self, provider: ValueProvider) -> str | None:
         """Why `provider` can't be asked now, or None if it can."""
@@ -247,8 +272,18 @@ class _Run:
         if stopped is not None:
             return str(stopped)
         if not self.budget.can_spend(provider.name, provider.credit_cost, now=self.now):
-            resets = format_utc(self.budget.resets_at(now=self.now))
-            return f"budget exhausted, retry after {resets}"
+            return str(self.budget.exhausted_error(now=self.now))
+        return None
+
+    def _stale_fallback(
+        self, entries: Iterable[CacheEntry | None]
+    ) -> ValueQuote | None:
+        """The first cached quote among `entries` no older than the limit."""
+        for entry in entries:
+            if entry is None or not _is_quote(entry):
+                continue
+            if self.now - entry.fetched_at <= self.stale_max_age:
+                return entry.result
         return None
 
     def _found(
@@ -258,15 +293,8 @@ class _Run:
         self.origins[card.card_id] = origin
 
 
-def _first_quote(
-    entries: Iterable[CacheEntry | None], *, fresh_only: bool
-) -> ValueQuote | None:
-    for entry in entries:
-        if entry is None or (fresh_only and not entry.fresh):
-            continue
-        if isinstance(entry.result, ValueQuote):
-            return entry.result
-    return None
+def _is_quote(entry: CacheEntry) -> bool:
+    return isinstance(entry.result, ValueQuote)
 
 
 def _negative_cause(result: QuoteResult, raw: bool) -> str:
@@ -278,9 +306,10 @@ def _negative_cause(result: QuoteResult, raw: bool) -> str:
 def _reason(causes: list[tuple[str, str]]) -> str:
     """One Needs-review reason from each provider's (name, cause).
 
-    One cause shared by every provider stands alone ("unmatched" reads as
-    "unmatched by all providers"); otherwise each distinct cause is followed
-    by the providers it applies to, in provider order.
+    One cause shared by every provider stands alone, with "unmatched" read
+    as "unmatched by <provider>" for a single provider and "unmatched by all
+    providers" otherwise. Mixed causes are each followed by the providers
+    they apply to, in provider order.
     """
     if not causes:
         return NO_PROVIDERS
@@ -288,8 +317,10 @@ def _reason(causes: list[tuple[str, str]]) -> str:
     for name, cause in causes:
         by_cause.setdefault(cause, []).append(name)
     if len(by_cause) == 1:
-        [cause] = by_cause
-        return UNMATCHED_BY_ALL if cause == UNMATCHED else cause
+        [(cause, names)] = by_cause.items()
+        if cause != UNMATCHED:
+            return cause
+        return f"unmatched by {names[0]}" if len(names) == 1 else UNMATCHED_BY_ALL
     return "; ".join(
         f"{cause} ({', '.join(names)})" for cause, names in by_cause.items()
     )

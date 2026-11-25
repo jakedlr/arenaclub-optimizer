@@ -5,6 +5,7 @@ The file is `values.sqlite` in `$XDG_CACHE_HOME/arenaclub-optimizer/` (else
 `~/.cache/arenaclub-optimizer/`), or in a directory the caller passes.
 """
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -27,6 +28,9 @@ DEFAULT_QUOTE_MAX_AGE = timedelta(days=7)
 DEFAULT_NEGATIVE_MAX_AGE = timedelta(days=30)
 # How long to wait for another process holding the file's write lock.
 _LOCK_TIMEOUT_SECONDS = 10.0
+SCHEMA_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 _QUOTE, _NOT_FOUND, _UNMATCHED = "quote", "not_found", "unmatched"
 _NEGATIVE_KINDS = {_NOT_FOUND: NotFound(), _UNMATCHED: Unmatched()}
@@ -51,9 +55,10 @@ CREATE TABLE IF NOT EXISTS provider_ids (
     PRIMARY KEY (provider, key)
 );
 CREATE TABLE IF NOT EXISTS credits (
-    provider TEXT NOT NULL,
-    day      TEXT NOT NULL,
-    spent    INTEGER NOT NULL,
+    provider  TEXT NOT NULL,
+    day       TEXT NOT NULL,
+    spent     INTEGER NOT NULL,
+    exhausted INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (provider, day)
 );
 """
@@ -100,11 +105,16 @@ class ValueCache:
         self.negative_max_age = negative_max_age
         self.directory.mkdir(parents=True, exist_ok=True)
         # Autocommit: each statement commits by itself; `_spend_credits` opens
-        # its own transaction.
+        # its own transaction. WAL lets readers (e.g. `rank`) run while another
+        # process (e.g. `watch`) writes; NORMAL sync is durable enough for a
+        # cache.
         self._db = sqlite3.connect(
             self.path, timeout=_LOCK_TIMEOUT_SECONDS, isolation_level=None
         )
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.executescript(_SCHEMA)
+        self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def __enter__(self) -> Self:
         return self
@@ -147,6 +157,7 @@ class ValueCache:
             else:
                 result = _NEGATIVE_KINDS[kind]
         except KeyError, TypeError, ValueError:
+            logger.debug("unreadable cache row for %s from %s", card_id, source)
             return None
         max_age = self.quote_max_age if kind == _QUOTE else self.negative_max_age
         return CacheEntry(result, fetched_at, now - fetched_at <= max_age)
@@ -202,27 +213,29 @@ class ValueCache:
 
     # Credit bookkeeping for CreditBudget, which owns the rules.
 
-    def _credits_spent(self, provider: str, day: str) -> int:
+    def _credits(self, provider: str, day: str) -> tuple[int, bool]:
+        """(credits spent, whether marked exhausted) for `provider` on `day`."""
         row = self._db.execute(
-            "SELECT spent FROM credits WHERE provider = ? AND day = ?",
+            "SELECT spent, exhausted FROM credits WHERE provider = ? AND day = ?",
             (provider, day),
         ).fetchone()
-        return 0 if row is None else row[0]
+        return (0, False) if row is None else (row[0], bool(row[1]))
 
     def _spend_credits(
         self, provider: str, day: str, n: int, limit: int | None
     ) -> bool:
-        """Add `n` to `provider`'s credits spent on `day`, unless that would
-        pass `limit` (None means no limit). Atomic across processes."""
+        """Add `n` to `provider`'s credits spent on `day`, unless the day is
+        marked exhausted or that would pass `limit` (None means no limit).
+        Atomic across processes."""
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            spent = self._credits_spent(provider, day)
-            if limit is not None and spent + n > limit:
+            spent, exhausted = self._credits(provider, day)
+            if exhausted or (limit is not None and spent + n > limit):
                 self._db.execute("ROLLBACK")
                 return False
             self._db.execute(
-                "INSERT OR REPLACE INTO credits (provider, day, spent)"
-                " VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO credits (provider, day, spent, exhausted)"
+                " VALUES (?, ?, ?, 0)",
                 (provider, day, spent + n),
             )
         except BaseException:
@@ -230,3 +243,11 @@ class ValueCache:
             raise
         self._db.execute("COMMIT")
         return True
+
+    def _exhaust_credits(self, provider: str, day: str) -> None:
+        """Mark `provider`'s credits for `day` as used up."""
+        self._db.execute(
+            "INSERT INTO credits (provider, day, spent, exhausted) VALUES (?, ?, 0, 1)"
+            " ON CONFLICT (provider, day) DO UPDATE SET exhausted = 1",
+            (provider, day),
+        )

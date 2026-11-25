@@ -77,18 +77,35 @@ class ProviderUnavailable(Exception):
         super().__init__(text)
 
 
+class BudgetExhausted(ProviderUnavailable):
+    """The provider's daily credit budget can't cover a request.
+    `retry_after` is when the budget resets."""
+
+    def __init__(self, retry_after: datetime | None = None) -> None:
+        super().__init__(retry_after, reason="budget exhausted")
+
+
 class ValueProvider(Protocol):
     """A source of Market Values.
 
     `name` identifies the provider; its quotes carry it as their `source`, and
     the cache and credit budget are keyed by it. `credit_cost` is what one
-    `quote` can cost in credits at most (0 means free). The resolver only
-    asks a provider when the budget can cover that; the provider spends its
-    actual credits itself, with `CreditBudget.try_spend`, before each request.
+    `quote` can cost in credits at most (0 means free).
 
     `quote` returns a ValueQuote, NotFound or Unmatched. A grade of None in
     the identity asks for the raw (ungraded) value. It raises
     ProviderUnavailable when a limit is reached or the provider is down.
+
+    Spending: the resolver only checks that the budget can cover
+    `credit_cost` before calling `quote`; it spends nothing. A provider with
+    a cost holds the run's CreditBudget and spends what each request really
+    costs, before sending it, with `budget.spend_or_raise(name, n)`, which
+    raises BudgetExhausted (so the Needs-review reason reads "budget
+    exhausted, retry after ...") when the budget can't cover it. Credits
+    spent on earlier requests of a quote that then fails are not refunded.
+    When the provider's own API reports its daily limit reached, the
+    provider calls `budget.exhaust(name)` so later runs today don't ask
+    again, then raises ProviderUnavailable.
     """
 
     name: str

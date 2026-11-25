@@ -16,6 +16,7 @@ from arenaclub_optimizer.values.cache import (
 )
 from arenaclub_optimizer.values.quote import (
     OVERRIDE_SOURCE,
+    BudgetExhausted,
     NotFound,
     ProviderUnavailable,
     QuoteResult,
@@ -24,6 +25,7 @@ from arenaclub_optimizer.values.quote import (
     ValueQuote,
 )
 from arenaclub_optimizer.values.resolver import (
+    DEFAULT_STALE_MAX_AGE,
     NeedsReview,
     ValueOrigin,
     ValueResolution,
@@ -36,8 +38,10 @@ __all__ = [
     "DEFAULT_DAILY_LIMITS",
     "DEFAULT_NEGATIVE_MAX_AGE",
     "DEFAULT_QUOTE_MAX_AGE",
+    "DEFAULT_STALE_MAX_AGE",
     "OVERRIDE_SOURCE",
     "VALUES_FILENAME",
+    "BudgetExhausted",
     "CacheEntry",
     "CreditBudget",
     "NeedsReview",

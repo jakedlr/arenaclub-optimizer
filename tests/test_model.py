@@ -414,7 +414,7 @@ def test_checklist_card_grader_is_compared_case_insensitively():
 def test_checklist_card_rejects_an_identity_that_disagrees(fields):
     identity = CardIdentity(grader="PSA", grade="10", cert_number="123")
     with pytest.raises(ValueError, match="identity"):
-        make_card("a", 1.0, cert_number="123", identity=identity, **fields)
+        make_card("a", 1.0, identity=identity, **{"cert_number": "123", **fields})
 
 
 def test_checklist_card_rejects_an_identity_missing_its_grade_fields():

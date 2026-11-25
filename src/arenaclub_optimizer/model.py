@@ -117,6 +117,11 @@ def _clean_year(value: object) -> int | None:
     raise ValueError(f"year must be a whole number, got {value!r}")
 
 
+# The default for ChecklistCard.identity, compared with `is`, so an explicitly
+# passed empty CardIdentity still counts as given.
+_DERIVED_IDENTITY = CardIdentity()
+
+
 @dataclass(frozen=True)
 class ChecklistCard:
     """One card on a Slab Pack's Checklist.
@@ -125,9 +130,14 @@ class ChecklistCard:
     in dollars, or None when no Market Value is known. `cert_number` is the
     grading company's cert number, when known; Manual Overrides can key on it.
     `identity` is what value providers look the card up by. When it is left
-    out, it is built from `grader`, `grade` and `cert_number` alone.
+    out, it is built from `grader`, `grade` and `cert_number` alone. When it
+    is given, its grader (ignoring case), grade and cert number must agree
+    with the card's, so changing one of those with `dataclasses.replace`
+    needs a matching identity too.
 
-    Raises ValueError if `market_value` is NaN, infinite or negative.
+    Raises ValueError if `market_value` is NaN, infinite or negative, or if
+    `identity` disagrees with the card; TypeError if `identity` isn't a
+    CardIdentity.
     """
 
     card_id: str
@@ -140,19 +150,39 @@ class ChecklistCard:
     market_value: float | None
     value_confidence: ValueConfidence | None
     cert_number: str | None = None
-    # None only as the "left out" default; __post_init__ always sets it.
-    identity: CardIdentity = None  # type: ignore[assignment]
+    # `_DERIVED_IDENTITY` marks "left out"; __post_init__ replaces it.
+    identity: CardIdentity = _DERIVED_IDENTITY
 
     def __post_init__(self) -> None:
-        if self.identity is None:
+        if self.identity is _DERIVED_IDENTITY:
             identity = CardIdentity(
                 grader=self.grader, grade=self.grade, cert_number=self.cert_number
             )
             object.__setattr__(self, "identity", identity)
+        else:
+            self._check_identity()
         value = self.market_value
         if value is not None and not (math.isfinite(value) and value >= 0):
             raise ValueError(
                 f"card {self.card_id!r} has an invalid Market Value: {value!r}"
+            )
+
+    def _check_identity(self) -> None:
+        identity = self.identity
+        if not isinstance(identity, CardIdentity):
+            raise TypeError(
+                f"card {self.card_id!r}: identity must be a CardIdentity, "
+                f"got {identity!r}"
+            )
+        grader = _clean_text(self.grader)
+        own = (grader and grader.casefold(), _clean_text(self.grade))
+        own += (_clean_text(self.cert_number),)
+        theirs = (identity.grader and identity.grader.casefold(), identity.grade)
+        theirs += (identity.cert_number,)
+        if own != theirs:
+            raise ValueError(
+                f"card {self.card_id!r}: identity grader, grade and cert "
+                f"{theirs!r} disagree with the card's {own!r}"
             )
 
 

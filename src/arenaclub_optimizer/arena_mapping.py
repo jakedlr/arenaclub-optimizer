@@ -7,6 +7,7 @@ own field names differ from ours: a pack's `name` is its Category, its
 Product Type.
 """
 
+import re
 from collections.abc import Mapping
 from typing import Any, NamedTuple
 
@@ -39,8 +40,8 @@ ACTIVE_STATUS = "active"
 BASE_NAME = "Base"
 # `gradingCompany` for cards Arena Club graded itself.
 ARENA_CLUB_GRADER = "arena_club"
-# Arena Club has no language field; Japanese cards carry this word in `setName`.
-JAPANESE_MARKER = "jpn"
+# Arena Club has no language field; Japanese cards carry "JPN" in `setName`.
+_JAPANESE_PATTERN = re.compile(r"\b(jpn|japanese)\b", re.IGNORECASE)
 
 # How grading companies read in a label. Others fall back to `_display_grader`.
 _GRADER_NAMES = {
@@ -164,12 +165,13 @@ def card_identity(card_json: Json) -> CardIdentity:
     Reads `year, setName, insert, subsetName, parallelName, playerName`
     (the card name), `setNumber, gradingCompany, overall` (the grade) and
     `cardCertNumber`, as Arena Club gives them. The card is Japanese when
-    `setName` contains the word "JPN" in any case, since Arena Club has no
-    language field (docs/research/arenaclub-api.md), and English otherwise.
+    `setName` contains the word "JPN" or "Japanese" in any case, punctuation
+    allowed around it, since Arena Club has no language field
+    (docs/research/arenaclub-api.md), and English otherwise.
     A year that isn't a whole number is left out.
     """
     set_name = _text(card_json.get("setName"))
-    japanese = JAPANESE_MARKER in set_name.casefold().split()
+    japanese = _JAPANESE_PATTERN.search(set_name) is not None
     return CardIdentity(
         year=_year(card_json.get("year")),
         set_name=set_name,
