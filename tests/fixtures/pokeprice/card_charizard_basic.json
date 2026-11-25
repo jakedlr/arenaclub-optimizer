@@ -1,0 +1,32 @@
+{
+  "data": {
+    "id": "507f1f77bcf86cd799439011",
+    "tcgPlayerId": "233294",
+    "name": "Charizard",
+    "setName": "Base Set",
+    "cardNumber": "4",
+    "totalSetNumber": null,
+    "rarity": "Holo Rare",
+    "cardType": "Pokemon",
+    "tcgPlayerUrl": "https://www.tcgplayer.com/product/233294",
+    "prices": {
+      "market": 420,
+      "low": 350,
+      "listings": 156,
+      "sellers": 42,
+      "recentSales": 0,
+      "primaryPrinting": "Holofoil",
+      "lastUpdated": "2026-11-23T12:00:00Z"
+    }
+  },
+  "metadata": {
+    "total": 1,
+    "count": 1,
+    "limit": 1,
+    "offset": 0,
+    "hasMore": false,
+    "language": "english",
+    "includes": {"priceHistory": false, "ebayData": false},
+    "apiCallsConsumed": {"total": 1, "breakdown": {"cards": 1}, "costPerCard": 1}
+  }
+}

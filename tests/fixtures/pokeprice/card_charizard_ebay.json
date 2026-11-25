@@ -1,0 +1,99 @@
+{
+  "data": {
+    "tcgPlayerId": "233294",
+    "name": "Charizard",
+    "setName": "Base Set",
+    "cardNumber": "4",
+    "prices": {"market": 420, "lastUpdated": "2026-11-23T12:00:00Z"},
+    "ebay": {
+      "updatedAt": "2026-11-23T12:00:00Z",
+      "lastScrapedDate": "2026-11-23T00:00:00Z",
+      "lastEbayCheck": "2026-11-23T12:00:00Z",
+      "salesByGrade": {
+        "psa8": {
+          "count": 45,
+          "totalValue": 22500,
+          "averagePrice": 500,
+          "medianPrice": 485,
+          "minPrice": 350,
+          "maxPrice": 750,
+          "marketPrice7Day": 495,
+          "marketPriceMedian7Day": 480,
+          "dailyVolume7Day": 2.5,
+          "marketTrend": "stable",
+          "lastMarketUpdate": "2026-11-22T00:00:00Z",
+          "lastSaleDate": "2026-11-21T00:00:00Z",
+          "smartMarketPrice": {
+            "price": 492,
+            "confidence": "high",
+            "method": "volume-weighted-median",
+            "daysUsed": 14
+          }
+        },
+        "psa9": {
+          "count": 78,
+          "totalValue": 117000,
+          "averagePrice": 1500,
+          "medianPrice": 1450,
+          "minPrice": 1100,
+          "maxPrice": 2200,
+          "marketPrice7Day": 1480,
+          "marketTrend": "rising",
+          "lastMarketUpdate": "2026-11-22T00:00:00Z",
+          "smartMarketPrice": {
+            "price": 3400,
+            "confidence": "high",
+            "method": "volume-weighted-median",
+            "daysUsed": 14
+          }
+        },
+        "psa10": {
+          "count": 23,
+          "totalValue": 345000,
+          "averagePrice": 15000,
+          "medianPrice": 14500,
+          "minPrice": 10000,
+          "maxPrice": 25000,
+          "marketPrice7Day": 14800,
+          "marketTrend": "stable",
+          "lastMarketUpdate": "2026-11-22T00:00:00Z",
+          "lastSaleDate": "2026-11-20T00:00:00Z",
+          "smartMarketPrice": {
+            "price": 14650,
+            "confidence": "medium",
+            "method": "rolling-median",
+            "daysUsed": 30
+          }
+        },
+        "cgc9_5": {
+          "count": 3,
+          "averagePrice": 9100,
+          "medianPrice": 8990,
+          "lastMarketUpdate": "2026-11-21T00:00:00Z",
+          "smartMarketPrice": {
+            "price": 8950,
+            "confidence": "low",
+            "method": "rolling-median",
+            "daysUsed": 30
+          }
+        }
+      },
+      "smartPriceOutlierByGrade": {"psa8": false, "psa9": true, "psa10": false},
+      "salesVelocity": {"dailyAverage": 1.2, "weeklyAverage": 8.5, "monthlyTotal": 35},
+      "totalSales": 149,
+      "gradesTracked": ["psa8", "psa9", "psa10", "cgc9_5"],
+      "dateRangeStart": "2026-08-23T00:00:00Z",
+      "dateRangeEnd": "2026-11-23T00:00:00Z"
+    }
+  },
+  "metadata": {
+    "total": 1,
+    "count": 1,
+    "includes": {"priceHistory": false, "ebayData": true},
+    "apiCallsConsumed": {
+      "total": 2,
+      "breakdown": {"cards": 1, "ebay": 1},
+      "costPerCard": 2
+    }
+  }
+}

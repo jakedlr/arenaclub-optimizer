@@ -1,0 +1,13 @@
+{
+  "data": [],
+  "metadata": {
+    "total": 0,
+    "count": 0,
+    "limit": 5,
+    "offset": 0,
+    "hasMore": false,
+    "language": "english",
+    "includes": {"priceHistory": false, "ebayData": false},
+    "apiCallsConsumed": {"total": 5, "breakdown": {"cards": 5}, "costPerCard": 1}
+  }
+}

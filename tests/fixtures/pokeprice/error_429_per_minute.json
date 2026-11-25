@@ -1,0 +1,8 @@
+{
+  "error": "Rate limit exceeded",
+  "message": "Per-minute call limit reached",
+  "limitType": "per_minute",
+  "retryAfter": 30,
+  "resetsAt": "2026-11-24T12:00:30.000Z",
+  "resolution": "Wait Retry-After seconds before retrying"
+}
