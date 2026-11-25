@@ -161,9 +161,10 @@ class PokePriceProvider:
     """A ValueProvider backed by PokéPrice Tracker's v2 API.
 
     `api_key` None (or blank) leaves the provider disabled: every quote raises
-    ProviderUnavailable("PokéPrice key not set") without a request. A 401 or
-    403 disables it for the rest of the run. Requests carry an honest
-    user-agent and are spaced at least `min_interval` seconds apart.
+    ProviderUnavailable("PokéPrice key not set", lasting) without a request. A
+    401 or 403 disables it for the rest of the run, also lasting. Requests
+    carry an honest user-agent and are spaced at least `min_interval`
+    seconds apart.
 
     Each request first spends its credits from `budget`. The set id (keyed by
     set name and language) and the card's tcgPlayerId are kept in `cache`'s
@@ -252,7 +253,7 @@ class PokePriceProvider:
         request) or BudgetExhausted.
         """
         if self._disabled is not None:
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         grade_key = None
         if identity.grade is not None:
             grade_key = _grade_key(identity.grader, identity.grade)
@@ -416,7 +417,7 @@ class PokePriceProvider:
         """GET `path`, spending `cost` credits first. None for a 404 when
         `missing_ok`; ProviderUnavailable for any other failure."""
         if self._disabled is not None:  # e.g. by a 401 earlier in the run
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         self._budget.spend_or_raise(NAME, cost)
         self._spacer.wait()
         logger.debug("PokéPrice GET %s (%d credits)", path, cost)
@@ -439,7 +440,7 @@ class PokePriceProvider:
         if status in (401, 403):
             self._disabled = f"PokéPrice rejected the API key (HTTP {status})"
             logger.warning("%s; not asking PokéPrice again this run", self._disabled)
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         if status == 404 and missing_ok:
             return None
         if not response.is_success:

@@ -1075,7 +1075,7 @@ def test_review_json(arena):
     document = review_document()
 
     assert document["version"] == 1
-    assert document["summary"] == {"needs_review": 1}
+    assert document["summary"] == {"needs_review": 1, "waiting_on_budget": 0}
     assert document["needs_review"] == [
         {
             "card_id": "card_sp_2",

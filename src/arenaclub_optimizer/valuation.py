@@ -63,13 +63,16 @@ class ValueSources:
 
 @dataclass(frozen=True)
 class ReviewEntry:
-    """A card on the Needs-review List, with the Slab Packs it is in."""
+    """A card on the Needs-review List, with the Slab Packs it is in.
+    `waiting` is True when a later run may value it without a Manual
+    Override (see `values.NeedsReview`)."""
 
     card_id: str
     cert_number: str | None
     label: str
     reason: str
     slab_packs: tuple[str, ...]
+    waiting: bool = False
 
 
 def card_priority(card: ChecklistCard) -> float:
@@ -86,7 +89,8 @@ def cards_by_priority(
     Those packs match the Category and price filters, are active and have
     Buyback enabled. Ties keep pack order, then Checklist order.
     """
-    cards = [card for pack in _evaluated(packs_with_rates, filters) for card in pack]
+    packs = _evaluated(packs_with_rates, filters)
+    cards = [card for pack in packs for card in pack.checklist]
     return sorted(cards, key=card_priority, reverse=True)
 
 
@@ -109,12 +113,12 @@ def value_packs(
 
 
 def review_entries(
-    packs_with_rates: PackPairs, resolution: ValueResolution
+    packs_with_rates: PackPairs, filters: Filters, resolution: ValueResolution
 ) -> tuple[ReviewEntry, ...]:
     """The Needs-review List of `resolution`, in its order, each card with the
-    names of the Slab Packs it is in."""
+    names of the Slab Packs it is in among those `rank` would evaluate."""
     packs_of: dict[str, list[str]] = {}
-    for pack, _ in packs_with_rates:
+    for pack in _evaluated(packs_with_rates, filters):
         for card in pack.checklist:
             names = packs_of.setdefault(card.card_id, [])
             if pack_name(pack) not in names:
@@ -126,6 +130,7 @@ def review_entries(
             label=item.label,
             reason=item.reason,
             slab_packs=tuple(packs_of.get(item.card_id, ())),
+            waiting=item.waiting,
         )
         for item in resolution.needs_review
     )
@@ -148,14 +153,13 @@ def open_value_sources(cache_dir: Path | None = None) -> Iterator[ValueSources]:
             yield ValueSources((pokeprice, cardvolume), cache, budget)
 
 
-def _evaluated(
-    packs_with_rates: PackPairs, filters: Filters
-) -> Iterator[tuple[ChecklistCard, ...]]:
-    """Each Checklist of a pack `rank` would evaluate."""
+def _evaluated(packs_with_rates: PackPairs, filters: Filters) -> Iterator[SlabPack]:
+    """Each pack `rank` would evaluate: matching the Category and price
+    filters, active, and with Buyback enabled."""
     for pack, rates in packs_with_rates:
         if (
             matches_pack_filters(pack, filters)
             and pack.active
             and rates.buyback_rate is not None
         ):
-            yield pack.checklist
+            yield pack

@@ -38,7 +38,8 @@ from arenaclub_optimizer.values.quote import (
 )
 
 NAME = "cardvolume"
-BASE_URL = "https://cardvolume.com/api/v1"
+SITE_URL = "https://cardvolume.com"
+BASE_URL = f"{SITE_URL}/api/v1"
 INDEX_FILENAME = "cardvolume-cards.json"
 INDEX_MAX_AGE = timedelta(days=1)
 DEFAULT_MIN_INTERVAL = 1.0
@@ -147,23 +148,28 @@ class CardVolumeProvider:
         if found is None:
             return NotFound()
         grade, uncertain = found
-        return self._grade_quote(card, grade, uncertain=uncertain or unsure_match)
+        return self._grade_quote(
+            card, entry, grade, uncertain=uncertain or unsure_match
+        )
 
-    def _grade_quote(self, card: Json, grade: Json, *, uncertain: bool) -> QuoteResult:
-        """The quote for one `grades[]` entry. `uncertain` lowers a market
-        price to low confidence (see `_grade_entry`)."""
-        citation = card.get("cite_as") if isinstance(card.get("cite_as"), str) else None
+    def _grade_quote(
+        self, card: Json, entry: Json, grade: Json, *, uncertain: bool
+    ) -> QuoteResult:
+        """The quote for one `grades[]` entry of `card` (whose index entry is
+        `entry`). `uncertain` lowers a market price to low confidence (see
+        `_grade_entry`). Every quote carries a citation (see `_citation`)."""
         market = _price(grade.get("market_price_usd"))
         if market is not None:
             as_of = _date(card.get("as_of")) or _date(card.get("updated"))
+            as_of = as_of or self._utc_now().date()
             sales = grade.get("market_sales_n")
             return ValueQuote(
                 market_value=market,
                 source=NAME,
-                as_of=as_of or self._utc_now().date(),
+                as_of=as_of,
                 sales_count=sales if _is_count(sales) else None,
                 confidence=(ValueConfidence.LOW if uncertain else ValueConfidence.HIGH),
-                citation=citation,
+                citation=_citation(card, entry, grade, market, as_of),
             )
         # Under 5 sales in 90 days CardVolume gives no market price; its docs
         # say to quote the last verified sale with its date instead.
@@ -177,7 +183,7 @@ class CardVolumeProvider:
                     as_of=when,
                     sales_count=1,
                     confidence=ValueConfidence.LOW,
-                    citation=citation,
+                    citation=_citation(card, entry, grade, price, when),
                 )
         return NotFound()
 
@@ -424,6 +430,37 @@ def _same_grade(offered: str, wanted: str) -> bool:
         return Decimal(offered.strip()) == Decimal(wanted.strip())
     except InvalidOperation:
         return offered.strip().casefold() == wanted.strip().casefold()
+
+
+def _citation(card: Json, entry: Json, grade: Json, figure: float, as_of: date) -> str:
+    """The attribution CardVolume asks for whenever one of its figures is
+    used: the card's own `cite_as`, else one built from the card, its grade,
+    the figure, its date and the card's URL, e.g. "Umbreon VMAX 215/203
+    (Evolving Skies), PSA 10: $3,800.00 as of 2026-11-24. CardVolume,
+    https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/".
+    Card fields fall back to the index entry's, and the URL to the card's
+    path on cardvolume.com."""
+    cite_as = card.get("cite_as")
+    if isinstance(cite_as, str) and cite_as.strip():
+        return cite_as
+
+    def text(key: str) -> str | None:
+        for source in (card, entry):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.split())
+        return None
+
+    name = " ".join(part for part in (text("name"), text("number")) if part)
+    set_name = text("set")
+    if set_name:
+        name = f"{name} ({set_name})" if name else set_name
+    label = grade.get("label")
+    if not (isinstance(label, str) and label.strip()):
+        label = f"{grade['grader']} {grade['grade']}"
+    head = ", ".join(part for part in (name, label) if part)
+    url = text("url") or f"{SITE_URL}/{entry['id']}/"
+    return f"{head}: ${figure:,.2f} as of {as_of.isoformat()}. CardVolume, {url}"
 
 
 def _price(value: object) -> float | None:

@@ -14,6 +14,7 @@ from rich.text import Text
 
 from arenaclub_optimizer.config import Config
 from arenaclub_optimizer.model import ChecklistCard
+from arenaclub_optimizer.providers import cardvolume
 from arenaclub_optimizer.ranking import (
     RankedPack,
     RankingReport,
@@ -99,14 +100,24 @@ def summary_line(report: RankingReport) -> str:
 def source_lines(report: RankingReport) -> tuple[str, ...]:
     """The citation of each Value Quote behind the Top Results, once each, in
     Top Results and Checklist order. CardVolume's terms ask for one wherever
-    its figures are used. A quote without a citation adds nothing."""
+    its figures are used, so a CardVolume quote without one (which its
+    provider never makes) is still attributed to CardVolume. Any other quote
+    without a citation adds nothing."""
     quotes = (
         report.values.values.get(card.card_id)
         for result in report.results
         for card in result.pack.checklist
     )
-    citations = (q.citation for q in quotes if q is not None and q.citation)
-    return tuple(dict.fromkeys(citations))
+    citations = (_citation(q) for q in quotes if q is not None)
+    return tuple(dict.fromkeys(c for c in citations if c))
+
+
+def _citation(quote: ValueQuote) -> str | None:
+    if quote.citation:
+        return quote.citation
+    if quote.source == cardvolume.NAME:
+        return f"CardVolume, {cardvolume.SITE_URL}/"
+    return None
 
 
 def unavailable_lines(values: ValueResolution) -> tuple[str, ...]:
@@ -189,17 +200,20 @@ def report_json(report: RankingReport, config: Config) -> dict[str, Any]:
 
 
 def review_summary(entries: Sequence[ReviewEntry]) -> str:
-    """E.g. "3 cards need review"."""
-    n = len(entries)
-    return f"{n} card needs review" if n == 1 else f"{n} cards need review"
+    """E.g. "3 cards need review", with ", 2 waiting on budget" when some
+    cards are only waiting for a later run."""
+    waiting = sum(entry.waiting for entry in entries)
+    n = len(entries) - waiting
+    text = f"{n} card needs review" if n == 1 else f"{n} cards need review"
+    return f"{text}, {waiting} waiting on budget" if waiting else text
 
 
-def review_table(entries: Iterable[ReviewEntry]) -> Table:
-    """The Needs-review List as a table. Every cell is a `Text`, so Arena Club
+def review_table(
+    entries: Iterable[ReviewEntry], *, title: str = "Needs review"
+) -> Table:
+    """Needs-review entries as a table. Every cell is a `Text`, so Arena Club
     data is never parsed as rich markup."""
-    table = Table(
-        title="Needs review", box=box.SIMPLE_HEAVY, show_edge=False, pad_edge=False
-    )
+    table = Table(title=title, box=box.SIMPLE_HEAVY, show_edge=False, pad_edge=False)
     table.add_column("Card id", overflow="fold")
     table.add_column("Cert", overflow="fold")
     table.add_column("Label", overflow="fold", ratio=2)
@@ -212,6 +226,7 @@ def review_table(entries: Iterable[ReviewEntry]) -> Table:
 
 def overrides_snippet(entries: Iterable[ReviewEntry]) -> str:
     """An overrides.toml snippet with one entry per card, ready to paste.
+    Cards that are `waiting` are left out: a later run may value them.
 
     Each entry is keyed by the card's cert number when it has one (a cert
     match wins over a card id), else by its card id. It notes the label and
@@ -221,6 +236,8 @@ def overrides_snippet(entries: Iterable[ReviewEntry]) -> str:
     """
     blocks = []
     for entry in entries:
+        if entry.waiting:
+            continue
         where = f"{', '.join(entry.slab_packs)}: " if entry.slab_packs else ""
         key = entry.cert_number or entry.card_id
         lines = [
@@ -241,24 +258,29 @@ def review_json(
     generated_at: datetime,
 ) -> dict[str, Any]:
     """The Needs-review List as a JSON-ready dict, with the `config` whose
-    filters chose the Slab Packs."""
-    rows = [
-        {
-            "card_id": entry.card_id,
-            "cert_number": entry.cert_number,
-            "label": entry.label,
-            "reason": entry.reason,
-            "slab_packs": list(entry.slab_packs),
-        }
-        for entry in entries
-    ]
+    filters chose the Slab Packs. Cards that are `waiting` are listed under
+    `waiting_on_budget` instead of `needs_review`."""
+    entries = list(entries)
+    review = [_review_row(e) for e in entries if not e.waiting]
+    waiting = [_review_row(e) for e in entries if e.waiting]
     return {
         "version": REVIEW_JSON_VERSION,
         "generated_at": generated_at.isoformat(),
         "settings": _settings_json(config),
-        "summary": {"needs_review": len(rows)},
-        "needs_review": rows,
+        "summary": {"needs_review": len(review), "waiting_on_budget": len(waiting)},
+        "needs_review": review,
+        "waiting_on_budget": waiting,
         "unavailable_sources": dict(unavailable),
+    }
+
+
+def _review_row(entry: ReviewEntry) -> dict[str, Any]:
+    return {
+        "card_id": entry.card_id,
+        "cert_number": entry.cert_number,
+        "label": entry.label,
+        "reason": entry.reason,
+        "slab_packs": list(entry.slab_packs),
     }
 
 

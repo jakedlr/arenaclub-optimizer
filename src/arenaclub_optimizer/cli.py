@@ -260,7 +260,7 @@ def review(
     )
     fetched = _fetch(config, errors)
     values = _value(fetched, config, overrides, errors)
-    entries = review_entries(fetched.packs, values)
+    entries = review_entries(fetched.packs, config.filters, values)
 
     if json_output:
         document = review_json(
@@ -274,22 +274,35 @@ def review(
         return
 
     console = Console()
-    if entries:
-        console.print(review_table(entries))
+    to_review = [entry for entry in entries if not entry.waiting]
+    waiting = [entry for entry in entries if entry.waiting]
+    if to_review:
+        console.print(review_table(to_review))
         path = config_dir() / OVERRIDES_FILENAME
         console.print()
         # soft_wrap: printed as is, so the path and snippet copy cleanly.
         console.print(
             Text(
-                f"To value them, paste this into {path} and fill in each market_value:"
+                f"To value them, paste this into {path}, then fill in each "
+                "market_value or delete the entry:"
             ),
             soft_wrap=True,
         )
         console.print()
-        console.print(Text(overrides_snippet(entries).rstrip("\n")), soft_wrap=True)
+        console.print(Text(overrides_snippet(to_review).rstrip("\n")), soft_wrap=True)
         console.print()
     else:
         console.print("No cards need review.")
+    if waiting:
+        console.print(review_table(waiting, title="Waiting on budget"))
+        console.print(
+            Text(
+                "These cards weren't looked up: a value source's budget ran out "
+                "or it was unavailable. A later run will try them again, so they "
+                "need no override."
+            )
+        )
+        console.print()
     for line in unavailable_lines(values):
         console.print(Text(line))
     console.print(Text(review_summary(entries)))

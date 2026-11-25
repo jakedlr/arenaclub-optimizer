@@ -54,12 +54,19 @@ class ValueOrigin(StrEnum):
 
 @dataclass(frozen=True)
 class NeedsReview:
-    """A card on the Needs-review List, with why it has no Market Value."""
+    """A card on the Needs-review List, with why it has no Market Value.
+
+    `waiting` is True when a provider that might still value the card
+    couldn't be asked this run, because its budget ran out or it was
+    temporarily unavailable (not `lasting`), so a later run may value it
+    without a Manual Override.
+    """
 
     card_id: str
     cert_number: str | None
     label: str
     reason: str
+    waiting: bool = False
 
 
 @dataclass(frozen=True)
@@ -168,6 +175,8 @@ class _Asked:
     causes: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     # Providers that couldn't be asked (budget exhausted or unavailable).
     skipped: list[str] = dataclasses.field(default_factory=list)
+    # Whether one of them may answer on a later run (not `lasting`).
+    waiting: bool = False
 
 
 class _Run:
@@ -227,7 +236,11 @@ class _Run:
             return
         self.needs_review.append(
             NeedsReview(
-                card.card_id, card.cert_number, card.label, _reason(asked.causes)
+                card.card_id,
+                card.cert_number,
+                card.label,
+                _reason(asked.causes),
+                waiting=asked.waiting,
             )
         )
 
@@ -253,10 +266,11 @@ class _Run:
                     result = provider.quote(identity)
                 except ProviderUnavailable as error:
                     self.unavailable[provider.name] = error
-                    skip = str(error)
+                    skip = error
             if skip is not None:
-                asked.causes.append((provider.name, skip))
+                asked.causes.append((provider.name, str(skip)))
                 asked.skipped.append(provider.name)
+                asked.waiting = asked.waiting or not skip.lasting
                 continue
             if isinstance(result, ValueQuote) and raw:
                 result = dataclasses.replace(result, confidence=ValueConfidence.LOW)
@@ -269,17 +283,18 @@ class _Run:
 
     def _cannot_ask(
         self, provider: ValueProvider, identity: CardIdentity
-    ) -> str | None:
+    ) -> ProviderUnavailable | None:
         """Why `provider` can't be asked about `identity` now, or None if it
-        can. The budget must cover the provider's `estimated_cost` for the
-        identity if it has one, else its `credit_cost`."""
+        can: the error it raised earlier in the run, or BudgetExhausted. The
+        budget must cover the provider's `estimated_cost` for the identity if
+        it has one, else its `credit_cost`."""
         stopped = self.unavailable.get(provider.name)
         if stopped is not None:
-            return str(stopped)
+            return stopped
         estimate = getattr(provider, "estimated_cost", None)
         cost = provider.credit_cost if estimate is None else estimate(identity)
         if not self.budget.can_spend(provider.name, cost, now=self.now):
-            return str(self.budget.exhausted_error(now=self.now))
+            return self.budget.exhausted_error(now=self.now)
         return None
 
     def _stale_fallback(
