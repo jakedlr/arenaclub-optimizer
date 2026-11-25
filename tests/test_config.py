@@ -84,6 +84,11 @@ def test_invalid_topics(topic):
     assert not is_valid_topic(topic)
 
 
+def test_tests_never_see_the_real_state_home():
+    # conftest points XDG_STATE_HOME at a temp dir for every test.
+    assert state_dir() != Path.home() / ".local" / "state" / APP_DIR_NAME
+
+
 def test_app_dir_and_file_names():
     assert APP_DIR_NAME == "arenaclub-optimizer"
     assert CONFIG_FILENAME == "config.toml"

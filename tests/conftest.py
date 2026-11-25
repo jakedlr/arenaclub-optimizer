@@ -10,7 +10,8 @@ def _isolated_cache_home(tmp_path_factory, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_state_home(tmp_path_factory, monkeypatch):
-    """Point XDG_STATE_HOME at a temp dir, so no test can touch ~/.local/state."""
+    """Point XDG_STATE_HOME at a temp dir, so no test can touch
+    ~/.local/state (Alert state, the Topic)."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path_factory.mktemp("xdg-state")))
 
 
