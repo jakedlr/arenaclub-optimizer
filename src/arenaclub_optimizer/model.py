@@ -6,6 +6,7 @@ Pure data and arithmetic: no I/O and no HTTP. Vocabulary follows GLOSSARY.md.
 import dataclasses
 import math
 import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -87,6 +88,23 @@ class SlabPack:
     active: bool
     checklist: tuple[ChecklistCard, ...]
     insurance_available: bool = True
+
+
+@dataclass(frozen=True)
+class SkippedPack:
+    """A Slab Pack that couldn't be evaluated. `name` is e.g. "Gold Pokemon"."""
+
+    pack_id: str
+    name: str
+    reason: str
+
+
+def category_key(name: str) -> str:
+    """`name` folded for comparison: case, accents and spacing are ignored,
+    so "Pokémon", "POKEMON" and " pokemon " all match."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(stripped.casefold().split())
 
 
 class NormalizationStatus(StrEnum):

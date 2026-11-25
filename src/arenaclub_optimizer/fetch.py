@@ -18,8 +18,7 @@ from arenaclub_optimizer.arena_mapping import (
     map_slab_pack,
     pack_rates,
 )
-from arenaclub_optimizer.model import SlabPack
-from arenaclub_optimizer.ranking import SkippedPack, category_key
+from arenaclub_optimizer.model import SkippedPack, SlabPack, category_key
 
 __all__ = ["ArenaSource", "FetchResult", "fetch_card_packs"]
 
@@ -54,7 +53,7 @@ def fetch_card_packs(
 
     Lists the Price Levels, keeps the card ones, fetches each of their Slab
     Packs once, and drops any outside `categories` (compared like
-    `ranking.category_key`; empty or None means all) before requesting cards.
+    `model.category_key`; empty or None means all) before requesting cards.
     Cards go through the client, whose cache makes repeats free. An inactive
     pack, or one with Buyback disabled, comes back with an empty Checklist and
     costs no card requests, since `ranking.rank` leaves it out either way.

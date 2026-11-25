@@ -5,7 +5,6 @@ docs/plan.md (Ranking, Filters, Value Coverage, Hit Rates).
 """
 
 import dataclasses
-import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,11 +18,15 @@ from arenaclub_optimizer.model import (
     DEFAULT_REJECT_DRIFT,
     DEFAULT_WARN_DRIFT,
     NormalizationStatus,
+    SkippedPack,
     SlabPack,
     ValueConfidence,
+    category_key,
 )
 from arenaclub_optimizer.risk import RiskResult, evaluate_risk
 
+# SkippedPack and category_key live in `model`, so that `fetch` can use them
+# without depending on ranking; they are re-exported here for callers.
 __all__ = [
     "RankedPack",
     "RankingReport",
@@ -63,15 +66,6 @@ class UnrankablePack:
 
 
 @dataclass(frozen=True)
-class SkippedPack:
-    """A Slab Pack that couldn't be evaluated. `name` is e.g. "Gold Pokemon"."""
-
-    pack_id: str
-    name: str
-    reason: str
-
-
-@dataclass(frozen=True)
 class RankingReport:
     """The Top Results, best first, plus the packs left out and why."""
 
@@ -84,14 +78,6 @@ class RankingReport:
 def pack_name(pack: SlabPack) -> str:
     """How a Slab Pack reads to the user: Price Level, then Category."""
     return f"{pack.price_level} {pack.category}"
-
-
-def category_key(name: str) -> str:
-    """`name` folded for comparison: case, accents and spacing are ignored,
-    so "Pokémon", "POKEMON" and " pokemon " all match."""
-    decomposed = unicodedata.normalize("NFKD", name)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return " ".join(stripped.casefold().split())
 
 
 def rank(
