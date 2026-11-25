@@ -92,8 +92,8 @@ def results_table(report: RankingReport, k: float, *, wide: bool = False) -> Tab
     table.add_column("Slab Pack", overflow="fold", min_width=min(longest, 16))
     for column in columns:
         table.add_column(column.header, justify="right", no_wrap=True)
-    for result in report.results:
-        cells = [pack_name(result.pack), *(c.cell(result) for c in columns)]
+    for name, result in zip(names, report.results, strict=True):
+        cells = [name, *(c.cell(result) for c in columns)]
         table.add_row(*(Text(cell) for cell in cells))
     return table
 
