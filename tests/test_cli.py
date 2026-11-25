@@ -200,8 +200,8 @@ def test_default_table_fits_80_columns_with_long_names_and_big_numbers(
     stdout = invoke_at(NARROW)
 
     assert_fits(stdout, 80)
-    # 0.9 x (0.005 x 9,999,999 + 0.995 x 60) - 10,000 = 35,053.72
-    for cell in ["$10,000.00", "+350.5%", "+$35,053.72", "One", "Edition"]:
+    # 0.9 x (0.005 x 9,999,999 + 0.995 x 60) - 10,000 = 35,053.7255
+    for cell in ["$10,000.00", "+350.5%", "+$35,053.73", "One", "Edition"]:
         assert cell in stdout
 
 

@@ -1,7 +1,10 @@
 """Render a RankingReport: the `rich` table, the summary line and the JSON."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+from rich import box
 from rich.table import Table
 from rich.text import Text
 
@@ -14,24 +17,45 @@ from arenaclub_optimizer.ranking import (
     pack_name,
 )
 
-__all__ = ["JSON_VERSION", "report_json", "results_table", "summary_line"]
+__all__ = [
+    "JSON_VERSION",
+    "note_lines",
+    "report_json",
+    "results_table",
+    "summary_line",
+]
 
 # Bump when a key is renamed or removed; adding keys keeps the version.
 JSON_VERSION = 1
 
 _DASH = "—"
+
+
+@dataclass(frozen=True)
+class _Column:
+    """A results-table column. `header` may break onto two lines, so a narrow
+    terminal never truncates it; `wide` columns appear only with `--wide`."""
+
+    header: str
+    cell: Callable[[RankedPack], str]
+    wide: bool = False
+
+
+def _slab_safe(result: RankedPack) -> str:
+    ev = result.ev.slab_safe_ev
+    return _DASH if ev is None else _signed_money(ev)
+
+
 _COLUMNS = (
-    "Slab Pack",
-    "Price",
-    "Buyback EV %",
-    "Buyback EV $",
-    "Market EV %",
-    "Slab Safe EV $",
-    "P(profit)",
-    "median×",
-    "Top-heaviness",
-    "Coverage",
-    "Notes",
+    _Column("Price", lambda r: f"${r.pack.price:,.2f}"),
+    _Column("Buyback\nEV %", lambda r: f"{r.ev.buyback_ev_pct:+.1%}"),
+    _Column("Buyback\nEV $", lambda r: _signed_money(r.ev.buyback_ev)),
+    _Column("Market\nEV %", lambda r: f"{r.ev.market_ev_pct:+.1%}", wide=True),
+    _Column("Slab Safe\nEV $", _slab_safe, wide=True),
+    _Column("P(profit)", lambda r: _probability(r.risk.p_profit)),
+    _Column("median×", lambda r: f"{r.risk.median_ratio:.2f}×"),
+    _Column("Top-\nheaviness", lambda r: f"{r.risk.top_heaviness:.0%}"),
+    _Column("Coverage", lambda r: f"{r.ev.value_coverage:.0%}", wide=True),
 )
 
 
@@ -43,20 +67,39 @@ def summary_line(report: RankingReport) -> str:
     )
 
 
-def results_table(report: RankingReport, k: float) -> Table:
-    """The Top Results as a table, best first. `k` goes in the caption, since
-    Buyback EV rests on it. Every cell is a `Text`, so Arena Club data such as
-    "Football [Japanese]" is never parsed as rich markup."""
+def results_table(report: RankingReport, k: float, *, wide: bool = False) -> Table:
+    """The Top Results as a table, best first.
+
+    The default columns fit 80 columns, rich's width when output is piped;
+    `wide` adds Market EV %, Slab Safe EV $ and Coverage. Figures never wrap
+    and the borderless layout leaves the room to the Slab Pack names, which
+    wrap instead. Notes are not a column: see `note_lines`. `k` goes in the
+    caption, since Buyback EV rests on it. Every cell is a `Text`, so Arena
+    Club data such as "Football [Japanese]" is never parsed as rich markup.
+    """
     table = Table(
         title="Top Results",
         caption=f"Buyback EV is an estimate: AC Value = k × Market Value, k = {k:g}.",
+        box=box.SIMPLE_HEAVY,
     )
-    for header in _COLUMNS:
-        text = header in ("Slab Pack", "Notes")
-        table.add_column(header, justify="left" if text else "right")
+    columns = [c for c in _COLUMNS if wide or not c.wide]
+    table.add_column("Slab Pack", overflow="fold")
+    for column in columns:
+        table.add_column(column.header, justify="right", no_wrap=True)
     for result in report.results:
-        table.add_row(*_row(result))
+        cells = [pack_name(result.pack), *(c.cell(result) for c in columns)]
+        table.add_row(*(Text(cell) for cell in cells))
     return table
+
+
+def note_lines(report: RankingReport) -> tuple[str, ...]:
+    """One "<Slab Pack>: <note>" line per Note, in Top Results order. They
+    print under the table, where a sentence has the full width to wrap in."""
+    return tuple(
+        f"{pack_name(result.pack)}: {note}"
+        for result in report.results
+        for note in result.notes
+    )
 
 
 def report_json(report: RankingReport, config: Config) -> dict[str, Any]:
@@ -78,25 +121,6 @@ def report_json(report: RankingReport, config: Config) -> dict[str, Any]:
         "unrankable": [_unrankable_json(entry) for entry in report.unrankable],
         "skipped": [_skipped_json(entry) for entry in report.skipped],
     }
-
-
-def _row(result: RankedPack) -> list[Text]:
-    ev, risk = result.ev, result.risk
-    slab_safe = _DASH if ev.slab_safe_ev is None else _signed_money(ev.slab_safe_ev)
-    cells = [
-        pack_name(result.pack),
-        f"${result.pack.price:,.2f}",
-        f"{ev.buyback_ev_pct:+.1%}",
-        _signed_money(ev.buyback_ev),
-        f"{ev.market_ev_pct:+.1%}",
-        slab_safe,
-        _probability(risk.p_profit),
-        f"{risk.median_ratio:.2f}×",
-        f"{risk.top_heaviness:.0%}",
-        f"{ev.value_coverage:.0%}",
-        "\n".join(result.notes),
-    ]
-    return [Text(cell) for cell in cells]
 
 
 def _signed_money(amount: float) -> str:

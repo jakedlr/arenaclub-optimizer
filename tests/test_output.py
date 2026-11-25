@@ -45,8 +45,13 @@ def report() -> RankingReport:
 
 
 def headers(table) -> list[str]:
-    """Each column's header, with a two-line header joined by a space."""
-    return [" ".join(str(column.header).split()) for column in table.columns]
+    """Each column's header, with a two-line header joined back into one:
+    "Buyback" over "EV %" reads "Buyback EV %", "Top-" over "heaviness"
+    reads "Top-heaviness"."""
+    return [
+        str(column.header).replace("-\n", "-").replace("\n", " ")
+        for column in table.columns
+    ]
 
 
 def render(table, width: int) -> str:
