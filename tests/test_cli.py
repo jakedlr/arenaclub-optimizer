@@ -108,23 +108,39 @@ def test_rank_prints_a_table_and_the_summary_line(arena):
     )
 
 
-def test_table_has_the_agreed_columns(arena):
-    result = invoke()
+def plain(stdout: str) -> str:
+    return ANSI_ESCAPE.sub("", stdout)
 
-    for header in [
-        "Slab Pack",
-        "Price",
-        "Buyback EV %",
-        "Buyback EV $",
-        "Market EV %",
-        "Slab Safe EV $",
-        "P(profit)",
-        "median×",
-        "Top-heaviness",
-        "Coverage",
-        "Notes",
-    ]:
-        assert header in result.stdout
+
+def header_text(stdout: str) -> str:
+    """The table's header rows (between the title and the rule under them),
+    where a header may be wrapped onto two lines, e.g. "Buyback" over "EV %"."""
+    lines = plain(stdout).splitlines()
+    title = next(i for i, line in enumerate(lines) if "Top Results" in line)
+    rule = next(i for i, line in enumerate(lines) if "━━━" in line and i > title)
+    return "\n".join(lines[title + 1 : rule])
+
+
+# One word or line of each header; full header names are checked in test_output.
+COMPACT_HEADER_WORDS = ["Slab", "Price", "Buyback", "P(profit)", "median×", "heaviness"]
+WIDE_ONLY_HEADER_WORDS = ["Market", "Slab Safe", "Coverage"]
+
+
+def test_default_table_has_the_compact_columns(arena):
+    headers = header_text(invoke().stdout)
+
+    for word in COMPACT_HEADER_WORDS:
+        assert word in headers
+    for word in [*WIDE_ONLY_HEADER_WORDS, "Notes"]:
+        assert word not in headers
+
+
+def test_wide_table_adds_market_ev_slab_safe_ev_and_coverage(arena):
+    headers = header_text(invoke("--wide").stdout)
+
+    for word in [*COMPACT_HEADER_WORDS, *WIDE_ONLY_HEADER_WORDS]:
+        assert word in headers
+    assert "Notes" not in headers
 
 
 def test_table_rows_are_in_buyback_ev_pct_order(arena):
@@ -137,6 +153,117 @@ def test_table_shows_the_high_variance_note(arena):
     stdout = invoke().stdout
 
     assert "Only" in stdout
+
+
+# --- layout at 80 columns ------------------------------------------------------
+
+NARROW = {"COLUMNS": "80"}
+
+
+def invoke_at(env: dict[str, str], *args: str):
+    result = runner.invoke(app, ["rank", *args], env=env)
+    assert result.exit_code == 0, result.stderr
+    return plain(result.stdout)
+
+
+def assert_fits(stdout: str, width: int) -> None:
+    assert "…" not in stdout
+    for line in stdout.splitlines():
+        assert len(line) <= width, line
+
+
+def test_default_table_fits_80_columns_and_truncates_nothing(arena):
+    stdout = invoke_at(NARROW)
+
+    assert_fits(stdout, 80)
+    for word in COMPACT_HEADER_WORDS:
+        assert word in header_text(stdout)
+    # Gold Pokemon, then Gold Football, every figure in full.
+    for cell in ["$100.00", "+43.7%", "+$43.73", "0.5%", "+8.0%", "+$8.00", "100.0%"]:
+        assert cell in stdout
+
+
+def test_default_table_fits_80_columns_with_long_names_and_big_numbers(
+    arena, config_dir
+):
+    # A $10,000 Slab Pack with a long name, and a large Buyback EV $.
+    (config_dir / "overrides.toml").write_text(
+        '["11111111"]\nmarket_value = 9999999\n[card_gp_base]\nmarket_value = 60\n'
+        "[card_gf_1]\nmarket_value = 120\n",
+        encoding="utf-8",
+    )
+    arena.levels[0]["priceCents"] = 1_000_000
+    pokemon = arena.packs["gold-pokemon"]
+    pokemon["category"].update(name="Black Diamond", priceCents=1_000_000)
+    pokemon["name"] = "One Piece Japanese Edition"
+
+    stdout = invoke_at(NARROW)
+
+    assert_fits(stdout, 80)
+    # 0.9 x (0.005 x 9,999,999 + 0.995 x 60) - 10,000 = 35,053.72
+    for cell in ["$10,000.00", "+350.5%", "+$35,053.72", "One", "Edition"]:
+        assert cell in stdout
+
+
+def test_wide_table_truncates_nothing_on_a_wide_terminal(arena):
+    stdout = invoke_at(WIDE, "--wide")
+
+    assert "…" not in stdout
+    for word in [*COMPACT_HEADER_WORDS, *WIDE_ONLY_HEADER_WORDS]:
+        assert word in header_text(stdout)
+    # Market EV % and Slab Safe EV $ for Gold Pokemon and Gold Football.
+    for cell in ["+59.7%", "+$59.60", "+20.0%", "-$2.00", "100%"]:
+        assert cell in stdout
+
+
+def test_default_table_truncates_nothing_on_a_wide_terminal(arena):
+    stdout = invoke_at(WIDE)
+
+    assert "…" not in stdout
+    assert "+$43.73" in stdout
+
+
+def test_notes_print_on_their_own_lines_under_the_table(arena):
+    stdout = invoke_at(NARROW)
+
+    lines = stdout.splitlines()
+    caption = next(i for i, line in enumerate(lines) if "k = 1." in line)
+    notes = lines.index("Notes:")
+    [note] = [i for i, line in enumerate(lines) if line.startswith("- Gold Pokemon: ")]
+    assert caption < notes < note
+    assert "Only" in lines[note]
+    assert not any(line.startswith("- Gold Football") for line in lines)
+
+
+def test_no_notes_heading_without_notes(arena):
+    stdout = invoke_at(NARROW, "--category", "football")
+
+    assert "Notes:" not in stdout
+
+
+def test_wide_table_also_prints_notes_under_the_table(arena):
+    stdout = invoke_at(WIDE, "--wide")
+
+    assert "Notes:" in stdout.splitlines()
+    assert any(line.startswith("- Gold Pokemon: Only") for line in stdout.splitlines())
+
+
+def test_notes_and_skipped_lines_wrap_instead_of_truncating(arena):
+    arena.packs["gold-football"]["isOfferEnabled"] = False
+
+    stdout = invoke_at(NARROW)
+
+    assert_fits(stdout, 80)
+    assert "Skipped Gold Football:" in stdout
+
+
+def test_wide_option_leaves_json_unchanged(arena):
+    narrow = rank_json()
+    wide = rank_json("--wide")
+
+    for document in (narrow, wide):
+        del document["generated_at"]
+    assert narrow == wide
 
 
 def test_summary_counts_skipped_packs(arena):
@@ -428,6 +555,35 @@ def test_price_option_overrides_config(arena, config_dir):
     assert len(rank_json("--price-max", "100")["results"]) == 2
 
 
+def test_price_options_skip_price_levels_before_fetching(arena):
+    document = rank_json("--price-min", "60")
+
+    assert result_ids(document) == ["gold-pokemon", "gold-football"]
+    assert "silver-pokemon" not in arena.requested("pack")
+    # 1 Price Level listing + 2 Slab Packs + 3 cards, instead of 9.
+    assert len(arena.calls) == 6
+
+
+def test_config_price_filter_skips_price_levels_before_fetching(arena, config_dir):
+    write_config(config_dir, "[filters]\nprice_max = 75\n")
+
+    rank_json()
+
+    assert arena.requested("pack") == ["silver-pokemon"]
+    assert len(arena.calls) == 4
+
+
+def test_rank_keeps_its_own_price_check_after_the_pre_filter(arena):
+    # The Price Level says $100, but the pack's own JSON says $150: the
+    # pre-filter lets it through and `rank` drops it on its own price.
+    arena.packs["gold-football"]["category"]["priceCents"] = 15000
+
+    document = rank_json("--price-max", "100")
+
+    assert "gold-football" in arena.requested("pack")
+    assert result_ids(document) == ["gold-pokemon"]
+
+
 def test_k_option_changes_buyback_ev(arena):
     football = rank_json("--k", "0.5", "--category", "football")["results"][0]
 
@@ -443,6 +599,35 @@ def test_help_documents_percent_units(arena):
     assert result.exit_code == 0
     assert "--min-ev" in text
     assert "percent" in text.lower()
+
+
+def help_text() -> str:
+    """`rank --help` as plain text: no styling, no panel borders, one space
+    between words, so that wrapped help reads as one string."""
+    result = runner.invoke(app, ["rank", "--help"], env=WIDE)
+    assert result.exit_code == 0
+    text = re.sub(r"[│╭╮╰╯─]", " ", ANSI_ESCAPE.sub("", result.stdout))
+    return " ".join(text.split())
+
+
+def test_help_says_defaults_come_from_the_config_file(arena):
+    text = help_text()
+
+    assert "config file" in text
+    assert "config.toml" in text
+    # The built-in defaults are only the fallback, and are named as such.
+    assert "Default: 10." not in text
+    assert "Default: 1." not in text
+    assert "Default: config file, else 10." in text
+    assert "Default: config file, else 1." in text
+    assert "Default: config file, else all." in text
+
+
+def test_help_documents_the_wide_option(arena):
+    text = help_text()
+
+    assert "--wide" in text
+    assert "Market EV %" in text
 
 
 @pytest.mark.parametrize(
