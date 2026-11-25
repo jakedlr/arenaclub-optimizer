@@ -161,6 +161,24 @@ def apply_values(pack: SlabPack, resolution: ValueResolution) -> SlabPack:
     return dataclasses.replace(pack, checklist=tuple(cards))
 
 
+def is_valued_without_lookup(
+    card: ChecklistCard,
+    providers: Sequence[ValueProvider],
+    overrides: Overrides,
+    cache: ValueCache,
+    now: datetime,
+) -> bool:
+    """Whether `resolve_values` would value `card` without asking a provider,
+    so without spending a credit: it has a Manual Override, or a fresh cached
+    quote from one of `providers`. A stale quote doesn't count, since the
+    resolver tries to refresh it first."""
+    if overrides.lookup(card.card_id, card.cert_number) is not None:
+        return True
+    return any(
+        _is_fresh_quote(cache.get(card.card_id, p.name, now=now)) for p in providers
+    )
+
+
 def is_arena_club_graded(identity: CardIdentity) -> bool:
     grader = identity.grader
     return grader is not None and grader.casefold() == ARENA_CLUB_GRADER
@@ -220,7 +238,7 @@ class _Run:
             for p in self.providers
         }
         for entry in entries.values():
-            if entry is not None and entry.fresh and _is_quote(entry):
+            if _is_fresh_quote(entry):
                 self._found(card, entry.result, ValueOrigin.CACHE)
                 return
 
@@ -317,6 +335,10 @@ class _Run:
 
 def _is_quote(entry: CacheEntry) -> bool:
     return isinstance(entry.result, ValueQuote)
+
+
+def _is_fresh_quote(entry: CacheEntry | None) -> bool:
+    return entry is not None and entry.fresh and _is_quote(entry)
 
 
 def _negative_cause(result: QuoteResult, raw: bool) -> str:

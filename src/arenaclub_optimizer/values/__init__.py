@@ -31,6 +31,7 @@ from arenaclub_optimizer.values.resolver import (
     ValueResolution,
     apply_values,
     is_arena_club_graded,
+    is_valued_without_lookup,
     resolve_values,
 )
 
@@ -57,5 +58,6 @@ __all__ = [
     "apply_values",
     "default_cache_dir",
     "is_arena_club_graded",
+    "is_valued_without_lookup",
     "resolve_values",
 ]
