@@ -54,7 +54,9 @@ class CreditBudget:
             raise ValueError(f"can't spend a negative number of credits: {n}")
         day = self._day(now)
         if n == 0:
-            return True
+            # Spending nothing still needs a day that isn't exhausted, so
+            # `exhaust` stops free providers too.
+            return self.can_spend(provider, 0, now=now)
         return self._cache._spend_credits(provider, day, n, self._limits.get(provider))
 
     def spend_or_raise(
@@ -77,9 +79,13 @@ class CreditBudget:
         self._cache._exhaust_credits(provider, self._day(now))
 
     def can_spend(self, provider: str, n: int, *, now: datetime | None = None) -> bool:
-        """Whether today's remaining budget covers `n` credits, without spending."""
-        remaining = self.remaining(provider, now=now)
-        return remaining is None or n <= remaining
+        """Whether today's remaining budget covers `n` credits, without spending.
+        False for any `n`, even 0, once `exhaust` has marked today used up."""
+        spent, exhausted = self._cache._credits(provider, self._day(now))
+        if exhausted:
+            return False
+        limit = self._limits.get(provider)
+        return limit is None or n <= max(limit - spent, 0)
 
     def remaining(self, provider: str, *, now: datetime | None = None) -> int | None:
         """Credits left today, or None for an unlimited provider."""
