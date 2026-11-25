@@ -393,6 +393,47 @@ def test_checklist_card_keeps_an_explicit_identity():
 
 
 def test_checklist_card_identity_survives_replace():
-    identity = CardIdentity(card_name="Umbreon")
+    identity = CardIdentity(card_name="Umbreon", grader="PSA", grade="10")
     card = dataclasses.replace(make_card("a", 1.0, identity=identity), hit_rate=0.5)
     assert card.identity is identity
+
+
+def test_checklist_card_grader_is_compared_case_insensitively():
+    identity = CardIdentity(grader="psa", grade="10")
+    assert make_card("a", 1.0, grader="PSA", identity=identity).identity is identity
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"grader": "bgs"},
+        {"grade": "9"},
+        {"cert_number": "999"},
+    ],
+)
+def test_checklist_card_rejects_an_identity_that_disagrees(fields):
+    identity = CardIdentity(grader="PSA", grade="10", cert_number="123")
+    with pytest.raises(ValueError, match="identity"):
+        make_card("a", 1.0, cert_number="123", identity=identity, **fields)
+
+
+def test_checklist_card_rejects_an_identity_missing_its_grade_fields():
+    with pytest.raises(ValueError, match="identity"):
+        make_card("a", 1.0, identity=CardIdentity(card_name="Umbreon"))
+
+
+def test_replacing_a_grade_field_needs_a_matching_identity():
+    card = make_card("a", 1.0, grader="psa", grade="10")
+    with pytest.raises(ValueError, match="identity"):
+        dataclasses.replace(card, grader="bgs")
+
+    regraded = dataclasses.replace(
+        card, grader="bgs", identity=dataclasses.replace(card.identity, grader="bgs")
+    )
+    assert regraded.identity.grader == "bgs"
+
+
+@pytest.mark.parametrize("identity", [None, "psa 10"])
+def test_checklist_card_identity_must_be_a_card_identity(identity):
+    with pytest.raises(TypeError, match="identity"):
+        make_card("a", 1.0, identity=identity)

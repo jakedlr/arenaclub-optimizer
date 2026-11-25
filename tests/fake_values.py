@@ -102,8 +102,9 @@ class FakeProvider:
 
     `answers` values can be a quote, NotFound, Unmatched, or a
     ProviderUnavailable to raise. A callable is called with the identity.
-    With `budget`, each quote spends `credit_cost` first, as a real provider
-    spends before each request, and raises ProviderUnavailable when it can't.
+    With `budget`, each quote first spends `spends` credits (default
+    `credit_cost`) with `spend_or_raise`, as a real provider spends before
+    each request, so it raises BudgetExhausted when it can't.
     """
 
     def __init__(
@@ -113,19 +114,19 @@ class FakeProvider:
         *,
         credit_cost: int = 0,
         budget: CreditBudget | None = None,
+        spends: int | None = None,
     ) -> None:
         self.name = name
         self.credit_cost = credit_cost
         self._answers = answers if callable(answers) else dict(answers)
         self._budget = budget
+        self._spends = credit_cost if spends is None else spends
         self.calls: list[CardIdentity] = []
 
     def quote(self, identity: CardIdentity) -> ValueQuote | NotFound | Unmatched:
         self.calls.append(identity)
-        if self._budget is not None and not self._budget.try_spend(
-            self.name, self.credit_cost
-        ):
-            raise ProviderUnavailable(reason="out of credits")
+        if self._budget is not None:
+            self._budget.spend_or_raise(self.name, self._spends)
         if callable(self._answers):
             answer = self._answers(identity)
         else:

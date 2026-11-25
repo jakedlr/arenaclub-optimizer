@@ -9,7 +9,9 @@ from fake_values import NOW, TODAY, Clock, FakeProvider, checklist_card, quote
 from arenaclub_optimizer.config import Override, Overrides
 from arenaclub_optimizer.model import SlabPack, ValueConfidence
 from arenaclub_optimizer.values import (
+    DEFAULT_STALE_MAX_AGE,
     OVERRIDE_SOURCE,
+    BudgetExhausted,
     CreditBudget,
     NeedsReview,
     NotFound,
@@ -37,8 +39,10 @@ def budget(cache):
     return CreditBudget(cache, {})
 
 
-def resolve(cards, providers, cache, budget, *, overrides=NO_OVERRIDES, now=NOW):
-    return resolve_values(cards, providers, overrides, cache, budget, now)
+def resolve(
+    cards, providers, cache, budget, *, overrides=NO_OVERRIDES, now=NOW, **kwargs
+):
+    return resolve_values(cards, providers, overrides, cache, budget, now, **kwargs)
 
 
 def reasons(resolution: ValueResolution) -> dict[str, str]:
@@ -312,7 +316,9 @@ def test_the_budget_resets_at_midnight_utc_between_runs(cache):
     }
 
 
-def test_a_stale_quote_is_kept_when_the_provider_cannot_be_asked(cache):
+def test_a_stale_quote_is_kept_at_low_confidence_when_its_provider_is_skipped(
+    cache,
+):
     budget = CreditBudget(cache, {"pp": 0})
     stale = quote(42.0, "pp")
     cache.put("card_a", "pp", stale, fetched_at=NOW - timedelta(days=10))
@@ -320,9 +326,87 @@ def test_a_stale_quote_is_kept_when_the_provider_cannot_be_asked(cache):
 
     result = resolve([checklist_card("card_a")], [provider], cache, budget)
 
-    assert result.values["card_a"] == stale
+    assert result.values["card_a"] == dataclasses.replace(
+        stale, confidence=ValueConfidence.LOW
+    )
     assert result.origins["card_a"] is ValueOrigin.STALE_CACHE
     assert result.needs_review == ()
+    # The cached row is left as it was.
+    assert cache.get("card_a", "pp", now=NOW).result == stale
+
+
+def test_a_stale_quote_is_kept_when_its_provider_is_unavailable(cache, budget):
+    stale = quote(42.0, "pp")
+    cache.put("card_a", "pp", stale, fetched_at=NOW - timedelta(days=10))
+    provider = FakeProvider("pp", {"card_a": ProviderUnavailable()})
+
+    result = resolve([checklist_card("card_a")], [provider], cache, budget)
+
+    assert result.values["card_a"].market_value == 42.0
+    assert result.values["card_a"].confidence is ValueConfidence.LOW
+    assert result.origins["card_a"] is ValueOrigin.STALE_CACHE
+
+
+def test_a_stale_quote_is_not_used_once_its_provider_has_answered(cache):
+    budget = CreditBudget(cache, {"cv": 0})
+    cache.put("card_a", "pp", quote(50.0, "pp"), fetched_at=NOW - timedelta(days=10))
+    answered = FakeProvider("pp", {"card_a": NotFound()})
+    skipped = FakeProvider("cv", credit_cost=1)
+
+    result = resolve([checklist_card("card_a")], [answered, skipped], cache, budget)
+
+    assert "card_a" not in result.values
+    assert reasons(result) == {
+        "card_a": (
+            "no price at grade (pp); "
+            f"budget exhausted, retry after {TOMORROW_MIDNIGHT} (cv)"
+        )
+    }
+
+
+def test_a_stale_quote_from_a_skipped_provider_is_used_after_others_answer(cache):
+    budget = CreditBudget(cache, {"cv": 0})
+    cache.put("card_a", "cv", quote(30.0, "cv"), fetched_at=NOW - timedelta(days=10))
+    answered = FakeProvider("pp", {"card_a": NotFound()})
+    skipped = FakeProvider("cv", credit_cost=1)
+
+    result = resolve([checklist_card("card_a")], [answered, skipped], cache, budget)
+
+    assert result.values["card_a"].source == "cv"
+    assert result.values["card_a"].confidence is ValueConfidence.LOW
+
+
+def test_a_stale_quote_is_used_up_to_thirty_days_old(cache):
+    assert DEFAULT_STALE_MAX_AGE == timedelta(days=30)
+    budget = CreditBudget(cache, {"pp": 0})
+    cache.put("card_a", "pp", quote(1.0, "pp"), fetched_at=NOW - timedelta(days=30))
+    older = NOW - timedelta(days=30, seconds=1)
+    cache.put("card_b", "pp", quote(2.0, "pp"), fetched_at=older)
+    provider = FakeProvider("pp", credit_cost=1)
+    cards = [checklist_card("card_a"), checklist_card("card_b")]
+
+    result = resolve(cards, [provider], cache, budget)
+
+    assert list(result.values) == ["card_a"]
+    assert reasons(result) == {
+        "card_b": f"budget exhausted, retry after {TOMORROW_MIDNIGHT}"
+    }
+
+
+def test_the_stale_fallback_age_is_a_parameter(cache):
+    budget = CreditBudget(cache, {"pp": 0})
+    cache.put("card_a", "pp", quote(1.0, "pp"), fetched_at=NOW - timedelta(days=8))
+    provider = FakeProvider("pp", credit_cost=1)
+
+    result = resolve(
+        [checklist_card("card_a")],
+        [provider],
+        cache,
+        budget,
+        stale_max_age=timedelta(days=7, hours=23),
+    )
+
+    assert "card_a" not in result.values
 
 
 # --- ProviderUnavailable -----------------------------------------------------
@@ -352,6 +436,22 @@ def test_an_unavailable_provider_is_not_cached_as_a_negative_outcome(cache, budg
     resolve([checklist_card("card_a")], [down], cache, budget)
 
     assert cache.get("card_a", "pp", now=NOW) is None
+
+
+def test_a_provider_out_of_credits_mid_quote_reports_budget_exhausted(cache):
+    budget = CreditBudget(cache, {"pp": 3}, clock=Clock())
+    # The resolver sees enough for credit_cost, but the quote needs more.
+    provider = FakeProvider(
+        "pp", {"card_a": quote(1.0, "pp")}, credit_cost=1, budget=budget, spends=4
+    )
+    cards = [checklist_card("card_a"), checklist_card("card_b")]
+
+    result = resolve(cards, [provider], cache, budget)
+
+    expected = f"budget exhausted, retry after {TOMORROW_MIDNIGHT}"
+    assert reasons(result) == {"card_a": expected, "card_b": expected}
+    assert result.unavailable == {"pp": expected}
+    assert provider.called_names == ["card_a"]
 
 
 def test_cards_after_an_outage_name_the_unavailable_provider(cache, budget):
@@ -426,7 +526,7 @@ def test_needs_review_names_the_card(cache, budget):
             card_id="card_a",
             cert_number="8AC1",
             label="2021 Umbreon PSA 10",
-            reason="unmatched by all providers",
+            reason="unmatched by pp",
         ),
     )
 
@@ -480,13 +580,22 @@ def test_naive_now_is_an_error(cache, budget):
         resolve([checklist_card("card_a")], [], cache, budget, now=datetime(2026, 1, 1))
 
 
-def test_now_defaults_to_the_current_time(cache, budget):
+def test_now_defaults_to_the_budgets_clock(cache):
+    when = datetime(2026, 3, 1, 9, 30, tzinfo=UTC)
+    budget = CreditBudget(cache, {}, clock=Clock(when))
     provider = FakeProvider("pp", {"card_a": quote(1.0, "pp")})
 
     resolve_values([checklist_card("card_a")], [provider], NO_OVERRIDES, cache, budget)
 
-    entry = cache.get("card_a", "pp", now=datetime.now(UTC))
-    assert entry is not None and entry.fresh
+    assert cache.get("card_a", "pp", now=when).fetched_at == when
+    assert budget.now() == when
+
+
+def test_budget_exhausted_is_a_provider_unavailable():
+    error = BudgetExhausted(datetime(2026, 11, 25, tzinfo=UTC))
+    assert isinstance(error, ProviderUnavailable)
+    assert error.reason == "budget exhausted"
+    assert str(error) == f"budget exhausted, retry after {TOMORROW_MIDNIGHT}"
 
 
 # --- apply_values ------------------------------------------------------------

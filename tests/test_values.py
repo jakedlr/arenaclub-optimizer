@@ -3,6 +3,7 @@
 import ast
 import dataclasses
 import math
+import sqlite3
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from arenaclub_optimizer.values import (
     DEFAULT_DAILY_LIMITS,
     DEFAULT_NEGATIVE_MAX_AGE,
     DEFAULT_QUOTE_MAX_AGE,
+    BudgetExhausted,
     CreditBudget,
     NotFound,
     ProviderUnavailable,
@@ -413,6 +415,76 @@ def test_budgets_sharing_a_file_see_each_others_spending(tmp_path):
         other = CreditBudget(second, {"pokeprice": 3})
         assert other.remaining("pokeprice", now=NOW) == 1
         assert not other.try_spend("pokeprice", 2, now=NOW)
+
+
+def test_spend_or_raise_spends_or_raises_budget_exhausted(cache):
+    budget = CreditBudget(cache, {"pokeprice": 3})
+    budget.spend_or_raise("pokeprice", 2, now=NOW)
+    assert budget.remaining("pokeprice", now=NOW) == 1
+
+    with pytest.raises(BudgetExhausted) as caught:
+        budget.spend_or_raise("pokeprice", 2, now=NOW)
+    assert isinstance(caught.value, ProviderUnavailable)
+    assert caught.value.retry_after == datetime(2026, 11, 25, tzinfo=UTC)
+    assert str(caught.value) == "budget exhausted, retry after 2026-11-25 00:00 UTC"
+    assert budget.remaining("pokeprice", now=NOW) == 1
+
+
+def test_exhausted_error_names_the_reset_time(cache):
+    error = CreditBudget(cache).exhausted_error(now=NOW)
+    assert isinstance(error, BudgetExhausted)
+    assert error.retry_after == datetime(2026, 11, 25, tzinfo=UTC)
+
+
+def test_exhaust_marks_the_rest_of_today_spent(cache):
+    budget = CreditBudget(cache, {"pokeprice": 100})
+    budget.try_spend("pokeprice", 10, now=NOW)
+
+    budget.exhaust("pokeprice", now=NOW)
+
+    assert budget.remaining("pokeprice", now=NOW) == 0
+    assert not budget.try_spend("pokeprice", 1, now=NOW)
+    assert not budget.can_spend("pokeprice", 1, now=NOW)
+    assert budget.try_spend("pokeprice", 0, now=NOW)
+    tomorrow = NOW + timedelta(days=1)
+    assert budget.remaining("pokeprice", now=tomorrow) == 100
+
+
+def test_exhaust_applies_to_a_provider_without_a_limit(cache):
+    budget = CreditBudget(cache, {})
+    budget.exhaust("cardvolume", now=NOW)
+
+    assert budget.remaining("cardvolume", now=NOW) == 0
+    assert not budget.try_spend("cardvolume", 1, now=NOW)
+    assert budget.remaining("cardvolume", now=NOW + timedelta(days=1)) is None
+
+
+def test_exhaust_is_persisted(tmp_path):
+    with ValueCache(tmp_path) as cache:
+        CreditBudget(cache, {"pokeprice": 100}).exhaust("pokeprice", now=NOW)
+    with ValueCache(tmp_path) as cache:
+        budget = CreditBudget(cache, {"pokeprice": 100})
+        assert budget.remaining("pokeprice", now=NOW) == 0
+        assert not budget.try_spend("pokeprice", 1, now=NOW)
+
+
+def test_budget_now_reads_its_clock(cache):
+    when = datetime(2026, 5, 5, 5, 5, tzinfo=UTC)
+    assert CreditBudget(cache, clock=lambda: when).now() == when
+
+
+# --- sqlite settings ---------------------------------------------------------
+
+
+def test_cache_uses_wal_and_a_schema_version(tmp_path):
+    with ValueCache(tmp_path) as cache:
+        assert cache._db.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+    other = sqlite3.connect(tmp_path / "values.sqlite")
+    try:
+        assert other.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert other.execute("PRAGMA user_version").fetchone()[0] == 1
+    finally:
+        other.close()
 
 
 # --- no HTTP -----------------------------------------------------------------

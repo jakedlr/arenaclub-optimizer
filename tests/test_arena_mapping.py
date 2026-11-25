@@ -507,7 +507,14 @@ def test_snapshot_japanese_cards_are_the_ones_with_jpn_in_set_name(cards_json):
 
 @pytest.mark.parametrize(
     "set_name",
-    ["2001 Pokemon Neo 4 JPN", "2019 Pokemon S&M JPN ", "2023 pokemon sv jpn"],
+    [
+        "2001 Pokemon Neo 4 JPN",
+        "2019 Pokemon S&M JPN ",
+        "2023 pokemon sv jpn",
+        "2023 Pokemon SV (JPN)",
+        "2023 Pokemon SV JPN, Promo",
+        "2023 Pokemon Japanese Promo",
+    ],
 )
 def test_jpn_in_set_name_means_japanese(set_name):
     identity = card_identity(card("card_a", setName=set_name))
@@ -515,7 +522,9 @@ def test_jpn_in_set_name_means_japanese(set_name):
     assert identity.set_name == set_name.strip()
 
 
-@pytest.mark.parametrize("set_name", ["2021 Pokemon SWSH", "2021 Pokemon JPNX", None])
+@pytest.mark.parametrize(
+    "set_name", ["2021 Pokemon SWSH", "2021 Pokemon JPNX", "2021 XJPN", None]
+)
 def test_other_set_names_mean_english(set_name):
     identity = card_identity(card("card_a", setName=set_name))
     assert identity.language is Language.ENGLISH
