@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -34,6 +35,7 @@ market_value = 120
 """
 
 WIDE = {"COLUMNS": "250"}
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @pytest.fixture
@@ -332,9 +334,11 @@ def test_k_option_changes_buyback_ev(arena):
 def test_help_documents_percent_units(arena):
     result = runner.invoke(app, ["rank", "--help"], env=WIDE)
 
+    # Rich styles help text when it detects CI (e.g. GitHub Actions).
+    text = ANSI_ESCAPE.sub("", result.stdout)
     assert result.exit_code == 0
-    assert "--min-ev" in result.stdout
-    assert "percent" in result.stdout.lower()
+    assert "--min-ev" in text
+    assert "percent" in text.lower()
 
 
 @pytest.mark.parametrize(
