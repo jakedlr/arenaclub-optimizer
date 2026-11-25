@@ -815,8 +815,14 @@ def player(card_id: str) -> str:
     return f"Player {card_id}"
 
 
-def unavailable(reason: str) -> FakeProvider:
-    return FakeProvider("pokeprice", lambda _: ProviderUnavailable(reason=reason))
+def unavailable(reason: str, *, lasting: bool = False) -> FakeProvider:
+    error = ProviderUnavailable(reason=reason, lasting=lasting)
+    return FakeProvider("pokeprice", lambda _: error)
+
+
+def no_key() -> FakeProvider:
+    """PokéPrice without a key: unavailable until the user sets one."""
+    return unavailable("PokéPrice key not set", lasting=True)
 
 
 def cards_by_id(document: dict) -> dict[str, dict]:
@@ -859,7 +865,7 @@ def test_cardvolume_values_the_cards_pokeprice_cannot(arena, values):
         "cardvolume",
         {player("card_sp_2"): quote(80.0, "cardvolume", citation=CITATION)},
     )
-    values.providers = [unavailable("PokéPrice key not set"), cardvolume]
+    values.providers = [no_key(), cardvolume]
 
     document = rank_json()
 
@@ -905,12 +911,13 @@ def test_a_limited_budget_values_grail_and_chase_cards_first(arena, values, conf
 
     # Priority: the Grail card first, then by Hit Rate: Gold Football's only
     # card (100%), Gold Pokemon's Lineup card (99.5%), Silver's two (50%).
-    reviewed = [entry["card_id"] for entry in document["needs_review"]]
-    assert reviewed == ["card_gp_base", "card_sp_1", "card_sp_2"]
+    waiting = [entry["card_id"] for entry in document["waiting_on_budget"]]
+    assert waiting == ["card_gp_base", "card_sp_1", "card_sp_2"]
     assert all(
         entry["reason"].startswith("budget exhausted")
-        for entry in document["needs_review"]
+        for entry in document["waiting_on_budget"]
     )
+    assert document["needs_review"] == []
 
 
 def test_the_summary_line_counts_values_from_cache_fetched_and_to_review(arena, values):
@@ -977,7 +984,7 @@ def test_no_sources_footer_without_citations(arena):
 
 
 def test_an_unavailable_value_source_is_reported(arena, values):
-    values.providers = [unavailable("PokéPrice key not set")]
+    values.providers = [no_key()]
 
     stdout = plain(invoke().stdout)
 
@@ -1088,7 +1095,7 @@ def test_review_json_keeps_stdout_pure_json(arena):
 
 
 def test_review_reports_unavailable_value_sources(arena, values):
-    values.providers = [unavailable("PokéPrice key not set")]
+    values.providers = [no_key()]
 
     stdout = plain(review().stdout)
     document = review_document()
@@ -1146,3 +1153,70 @@ def test_review_help_lists_its_options():
     text = plain(result.stdout)
     for option in ["--category", "--price-min", "--price-max", "--json"]:
         assert option in text
+
+
+# --- arena review: cards waiting on budget -------------------------------------------
+
+
+def budget_for_two(values) -> None:
+    """PokéPrice can quote two cards, then its budget runs out: the Grail
+    card and Gold Football's card are valued, the other three wait."""
+    values.budget = CreditBudget(values.cache, {"pokeprice": 2}, clock=Clock(NOW))
+    values.providers = [
+        FakeProvider(
+            "pokeprice",
+            lambda _: quote(10.0, "pokeprice"),
+            credit_cost=1,
+            budget=values.budget,
+        )
+    ]
+
+
+def test_review_lists_cards_waiting_on_budget_in_their_own_section(
+    arena, values, config_dir
+):
+    no_overrides(config_dir)
+    budget_for_two(values)
+
+    stdout = plain(review().stdout)
+
+    assert "Waiting on budget" in stdout
+    for card_id in ["card_gp_base", "card_sp_1", "card_sp_2"]:
+        assert card_id in stdout
+    assert "budget exhausted" in stdout
+    assert stdout.rstrip().endswith("0 cards need review, 3 waiting on budget")
+
+
+def test_cards_waiting_on_budget_are_left_out_of_the_snippet(arena, values, config_dir):
+    no_overrides(config_dir)
+    budget_for_two(values)
+
+    stdout = plain(review().stdout)
+
+    assert "market_value" not in stdout
+    assert '["22222222"]' not in stdout
+    assert '["card_sp_1"]' not in stdout
+
+
+def test_a_temporarily_unavailable_source_puts_cards_in_waiting(arena, values):
+    values.providers = [unavailable("PokéPrice HTTP 503 on /sets")]
+
+    document = review_document()
+
+    assert document["needs_review"] == []
+    assert [e["card_id"] for e in document["waiting_on_budget"]] == ["card_sp_2"]
+
+
+def test_a_missing_key_still_puts_cards_up_for_review(arena, values):
+    values.providers = [no_key()]
+
+    document = review_document()
+
+    assert [e["card_id"] for e in document["needs_review"]] == ["card_sp_2"]
+    assert document["waiting_on_budget"] == []
+
+
+def test_the_snippet_header_says_to_fill_in_or_delete_each_entry(arena):
+    stdout = plain(review().stdout).replace("\n", " ")
+
+    assert "fill in each market_value or delete the entry" in stdout

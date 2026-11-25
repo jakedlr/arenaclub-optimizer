@@ -988,3 +988,51 @@ def test_no_fixture_holds_a_key_or_auth_header():
         assert "Bearer" not in text, path.name
         assert "Authorization" not in text, path.name
         assert KEY not in text, path.name
+
+
+# --- lasting or temporary --------------------------------------------------------
+
+
+@pytest.mark.parametrize("api_key", [None, "bad key"])
+def test_a_missing_or_malformed_key_is_a_lasting_unavailability(
+    cache, budget, api, api_key
+):
+    with make_provider(cache, budget, api, api_key=api_key) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert raised.value.lasting is True
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_key_is_a_lasting_unavailability(provider, api, status):
+    api.routes[SETS] = (status, fixture(f"error_{status}.json"), {})
+    for _ in range(2):
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+        assert raised.value.lasting is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        (429, "error_429_daily.json", {"Retry-After": "43200"}),
+        (429, "error_429_per_minute.json", {"Retry-After": "30"}),
+        (500, "error_404.json", {}),
+    ],
+)
+def test_limits_and_server_errors_are_temporary(provider, api, route):
+    status, body, headers = route
+    api.routes[SETS] = (status, fixture(body), headers)
+    with pytest.raises(ProviderUnavailable) as raised:
+        provider.quote(charizard())
+    assert raised.value.lasting is False
+
+
+def test_a_network_error_is_temporary(cache, budget):
+    def fail(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with make_provider(cache, budget, fail) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert raised.value.lasting is False

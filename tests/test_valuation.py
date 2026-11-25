@@ -38,10 +38,11 @@ def pack(
     category: str = "Pokemon",
     price: float = 100.0,
     active: bool = True,
+    level: str = "Gold",
 ) -> SlabPack:
     return SlabPack(
         pack_id=pack_id,
-        price_level="Gold",
+        price_level=level,
         category=category,
         price=price,
         active=active,
@@ -221,7 +222,7 @@ def test_review_entries_name_each_cards_slab_packs(cache):
     pairs = [(a, RATES), (b, RATES)]
     resolution = value_packs(pairs, Filters(), Overrides(), sources(cache))
 
-    entries = review_entries(pairs, resolution)
+    entries = review_entries(pairs, Filters(), resolution)
 
     assert entries[0] == ReviewEntry(
         card_id="a1",
@@ -229,9 +230,45 @@ def test_review_entries_name_each_cards_slab_packs(cache):
         label="Card A1",
         reason="no value providers",
         slab_packs=("Gold Pokemon",),
+        waiting=False,
     )
     assert [e.card_id for e in entries] == ["a1", "a2", "b1"]
     assert entries[2].slab_packs == ("Gold Football",)
+
+
+def test_review_entries_leave_out_packs_rank_leaves_out(cache):
+    shared = card("shared")
+    pairs = [
+        (pack("live", [shared], level="Gold"), RATES),
+        (pack("sold-out", [shared], level="Silver", active=False), RATES),
+        (pack("no-buyback", [shared], level="Bronze"), NO_BUYBACK),
+        (pack("dear", [shared], level="Platinum", price=500.0), RATES),
+    ]
+    filters = Filters(price_max=150.0)
+    resolution = value_packs(pairs, filters, Overrides(), sources(cache))
+
+    [entry] = review_entries(pairs, filters, resolution)
+
+    assert entry.slab_packs == ("Gold Pokemon",)
+
+
+def test_review_entries_mark_cards_waiting_on_budget(cache):
+    budget = CreditBudget(cache, {"pokeprice": 2}, clock=Clock(NOW))
+    provider = FakeProvider("pokeprice", credit_cost=2, budget=budget)
+    lasting = FakeProvider(
+        "cardvolume",
+        lambda _: ProviderUnavailable(reason="key not set", lasting=True),
+    )
+    pairs = [(pack("p", [card("first"), card("second")]), RATES)]
+    run = ValueSources((provider, lasting), cache, budget)
+    resolution = value_packs(pairs, Filters(), Overrides(), run)
+
+    entries = review_entries(pairs, Filters(), resolution)
+
+    assert [(e.card_id, e.waiting) for e in entries] == [
+        ("first", False),
+        ("second", True),
+    ]
 
 
 # --- the real value sources -------------------------------------------------------

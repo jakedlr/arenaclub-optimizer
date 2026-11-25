@@ -394,7 +394,7 @@ def test_review_json_lists_each_card():
 
     assert document["version"] == 1
     assert document["generated_at"] == WHEN.isoformat()
-    assert document["summary"] == {"needs_review": 2}
+    assert document["summary"] == {"needs_review": 2, "waiting_on_budget": 0}
     assert document["settings"] == report_json(report(), Config())["settings"]
     assert document["unavailable_sources"] == {"pokeprice": "PokéPrice key not set"}
     assert document["needs_review"][1] == {
@@ -404,3 +404,74 @@ def test_review_json_lists_each_card():
         "reason": "no raw price",
         "slab_packs": ["Gold Pokemon", "Silver Pokemon"],
     }
+
+
+# --- cards waiting on budget -----------------------------------------------------
+
+WAITING = ReviewEntry(
+    card_id="card_wait",
+    cert_number="99999999",
+    label="2021 Pokemon SWSH Evolving Skies Leafeon VMAX #205 PSA 10",
+    reason="budget exhausted, retry after 2026-11-25 00:00 UTC",
+    slab_packs=("Gold Pokemon",),
+    waiting=True,
+)
+
+
+def test_review_entries_are_not_waiting_by_default():
+    assert UMBREON.waiting is False
+
+
+def test_the_snippet_leaves_out_cards_waiting_on_budget():
+    data = tomllib.loads(overrides_snippet([UMBREON, WAITING, NO_CERT]))
+
+    assert set(data) == {"12345678", "card_ac"}
+
+
+def test_the_snippet_is_empty_when_every_card_is_waiting():
+    assert overrides_snippet([WAITING]) == ""
+
+
+def test_review_summary_counts_cards_waiting_on_budget_separately():
+    assert review_summary([UMBREON, WAITING, NO_CERT]) == (
+        "2 cards need review, 1 waiting on budget"
+    )
+    assert review_summary([WAITING]) == "0 cards need review, 1 waiting on budget"
+
+
+def test_the_review_table_takes_a_title():
+    table = review_table([WAITING], title="Waiting on budget")
+
+    assert "Waiting on budget" in render(table, 200)
+
+
+def test_review_json_lists_waiting_cards_on_their_own():
+    document = review_json(
+        [UMBREON, WAITING],
+        Config(),
+        unavailable={},
+        generated_at=WHEN,
+    )
+
+    assert document["summary"] == {"needs_review": 1, "waiting_on_budget": 1}
+    assert [e["card_id"] for e in document["needs_review"]] == ["card_umbreon"]
+    assert document["waiting_on_budget"] == [
+        {
+            "card_id": "card_wait",
+            "cert_number": "99999999",
+            "label": WAITING.label,
+            "reason": WAITING.reason,
+            "slab_packs": ["Gold Pokemon"],
+        }
+    ]
+
+
+# --- CardVolume attribution ---------------------------------------------------------
+
+
+def test_a_cardvolume_value_without_a_citation_is_still_attributed():
+    values = cited_values(card_gf_1=quote(120, "cardvolume", citation=None))
+
+    lines = source_lines(report(values))
+
+    assert lines == (CV_SILVER, "CardVolume, https://cardvolume.com/")
