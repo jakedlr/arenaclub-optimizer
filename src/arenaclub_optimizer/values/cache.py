@@ -211,6 +211,14 @@ class ValueCache:
             (provider, key, value),
         )
 
+    def delete_provider_id(self, provider: str, key: str) -> None:
+        """Forget the provider id stored under `key`, e.g. one the provider
+        no longer recognises. Does nothing if there is none."""
+        self._db.execute(
+            "DELETE FROM provider_ids WHERE provider = ? AND key = ?",
+            (provider, key),
+        )
+
     # Credit bookkeeping for CreditBudget, which owns the rules.
 
     def _credits(self, provider: str, day: str) -> tuple[int, bool]:

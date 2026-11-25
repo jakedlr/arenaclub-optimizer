@@ -16,12 +16,12 @@ import os
 import re
 import time
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 import httpx
 
@@ -67,6 +67,9 @@ RAW_LOOKUP_COST = cards_cost(1, ebay=False)
 # The most one quote can cost: resolving the set and the card, then pricing it.
 CREDIT_COST = SET_SEARCH_COST + CARD_SEARCH_COST + PRICED_LOOKUP_COST
 
+# A 429 that names no limit type but asks us to wait longer than this is
+# taken as the daily limit.
+DAILY_LIMIT_WAIT = timedelta(hours=1)
 # A graded quote resting on fewer sales than this is low confidence.
 HIGH_CONFIDENCE_SALES = 5
 # Grading companies PokéPrice keys `salesByGrade` by.
@@ -120,6 +123,36 @@ class _Secret:
     __str__ = __repr__
 
 
+class _BearerAuth(httpx.Auth):
+    """Adds `Authorization: Bearer <key>` to each request as it is sent, so
+    the key is never held in a plain local or dict that a traceback with
+    locals could show."""
+
+    def __init__(self, key: _Secret) -> None:
+        self._key = key
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response]:
+        request.headers["Authorization"] = "Bearer " + self._key.reveal()
+        yield request
+
+    def __repr__(self) -> str:
+        return "_BearerAuth(<redacted>)"
+
+
+class _Lookup(NamedTuple):
+    """How a card is looked up: the language, the set name and card text to
+    search for, and the provider-id keys its set id and tcgPlayerId are
+    cached under."""
+
+    language: str
+    set_query: str
+    search: str
+    set_key: str
+    card_key: str
+
+
 class PokePriceProvider:
     """A ValueProvider backed by PokéPrice Tracker's v2 API.
 
@@ -129,8 +162,9 @@ class PokePriceProvider:
     user-agent and are spaced at least `min_interval` seconds apart.
 
     Each request first spends its credits from `budget`. The set id (keyed by
-    set name and language) and the card's tcgPlayerId are kept permanently in
-    `cache`'s provider ids. Use it as a context manager, or call `close`.
+    set name and language) and the card's tcgPlayerId are kept in `cache`'s
+    provider ids until PokéPrice no longer knows the id or returns another
+    card for it. Use it as a context manager, or call `close`.
     """
 
     name = NAME
@@ -163,6 +197,7 @@ class PokePriceProvider:
         self._http = httpx.Client(
             base_url=base_url,
             headers={"User-Agent": USER_AGENT},
+            auth=None if self._key is None else _BearerAuth(self._key),
             timeout=timeout,
             transport=transport,
         )
@@ -222,63 +257,91 @@ class PokePriceProvider:
             grade_key = _grade_key(identity.grader, identity.grade)
             if grade_key is None:
                 return NotFound()
-        tcg_player_id = self._tcg_player_id(identity)
+        lookup = _lookup(identity)
+        if lookup is None:
+            return Unmatched()
+        tcg_player_id = self._tcg_player_id(identity, lookup)
         if tcg_player_id is None:
             return Unmatched()
         card = self._get_card(
-            tcg_player_id, identity.language.value, ebay=grade_key is not None
+            tcg_player_id, lookup.language, ebay=grade_key is not None
         )
-        if card is None:
+        if card is None or not _same_card(card, identity, strict=False):
+            # PokéPrice no longer knows the id, or it is another card: resolve
+            # the card again next time.
+            self._cache.delete_provider_id(NAME, lookup.card_key)
             return Unmatched()
         if grade_key is None:
             return self._raw_quote(card)
         return self._graded_quote(card, grade_key)
 
+    def estimated_cost(self, identity: CardIdentity) -> int:
+        """What quoting `identity` would cost now, from what is cached: 2
+        credits graded (1 raw) with its tcgPlayerId cached, 7 (6) with only
+        its set id cached, 8 (7) with neither, and 0 when a quote would send
+        nothing. Makes no request and spends nothing."""
+        if self._disabled is not None:
+            return 0
+        graded = identity.grade is not None
+        if graded and _grade_key(identity.grader, identity.grade) is None:
+            return 0
+        lookup = _lookup(identity)
+        if lookup is None:
+            return 0
+        cost = cards_cost(1, ebay=graded)
+        if self._cache.get_provider_id(NAME, lookup.card_key) is not None:
+            return cost
+        cost += cards_cost(CARD_SEARCH_LIMIT, ebay=False)
+        if self._cache.get_provider_id(NAME, lookup.set_key) is None:
+            cost += SET_SEARCH_COST
+        return cost
+
     # --- resolving a card ----------------------------------------------------
 
-    def _tcg_player_id(self, identity: CardIdentity) -> str | None:
-        """The card's tcgPlayerId, from the cache or a set and card search."""
-        set_query = _set_query(identity)
-        search = identity.set_number or identity.card_name
-        if set_query is None or search is None:
-            return None
-        language = identity.language.value
-        card_key = _card_key(identity, set_query)
-        cached = self._cache.get_provider_id(NAME, card_key)
+    def _tcg_player_id(self, identity: CardIdentity, lookup: _Lookup) -> str | None:
+        """The card's tcgPlayerId, from the cache or a set and card search.
+
+        A set id found only as the first `/sets` result (no exact name match)
+        is cached once a card matches in that set by name and number.
+        """
+        cached = self._cache.get_provider_id(NAME, lookup.card_key)
         if cached is not None:
             return cached
-        set_id = self._set_id(set_query, language)
+        set_id, exact = self._set_id(lookup)
         if set_id is None:
             return None
         params = {
             "setId": set_id,
-            "search": search,
-            "language": language,
+            "search": lookup.search,
+            "language": lookup.language,
             "limit": str(CARD_SEARCH_LIMIT),
         }
         cost = cards_cost(CARD_SEARCH_LIMIT, ebay=False)
         body = self._get("/cards", params, cost=cost)
         found = _match_card(_records(body), identity)
-        if found is not None:
-            self._cache.put_provider_id(NAME, card_key, found)
+        if found is None:
+            return None
+        if not exact:
+            self._cache.put_provider_id(NAME, lookup.set_key, set_id)
+        self._cache.put_provider_id(NAME, lookup.card_key, found)
         return found
 
-    def _set_id(self, set_query: str, language: str) -> str | None:
-        """The set id for `set_query`, from the cache or `/sets`."""
-        set_key = f"set:{language}|{_normalise(set_query)}"
-        cached = self._cache.get_provider_id(NAME, set_key)
+    def _set_id(self, lookup: _Lookup) -> tuple[str | None, bool]:
+        """The set id to search in, and whether it is certain: cached, or
+        the exact name match from `/sets` (which is then cached)."""
+        cached = self._cache.get_provider_id(NAME, lookup.set_key)
         if cached is not None:
-            return cached
+            return cached, True
         params = {
-            "search": set_query,
-            "language": language,
+            "search": lookup.set_query,
+            "language": lookup.language,
             "limit": str(SET_SEARCH_LIMIT),
         }
         body = self._get("/sets", params, cost=SET_SEARCH_COST)
-        found = _choose_set(_records(body), set_query)
-        if found is not None:
-            self._cache.put_provider_id(NAME, set_key, found)
-        return found
+        set_id, exact = _choose_set(_records(body), lookup.set_query)
+        if set_id is not None and exact:
+            self._cache.put_provider_id(NAME, lookup.set_key, set_id)
+        return set_id, exact
 
     def _get_card(
         self, tcg_player_id: str, language: str, *, ebay: bool
@@ -351,26 +414,29 @@ class PokePriceProvider:
     ) -> Json | None:
         """GET `path`, spending `cost` credits first. None for a 404 when
         `missing_ok`; ProviderUnavailable for any other failure."""
-        if self._key is None:  # disabled during the run, e.g. by a 401
-            raise ProviderUnavailable(reason=self._disabled or KEY_NOT_SET)
+        if self._disabled is not None:  # e.g. by a 401 earlier in the run
+            raise ProviderUnavailable(reason=self._disabled)
         self._budget.spend_or_raise(NAME, cost)
         self._wait_for_slot()
         logger.debug("PokéPrice GET %s (%d credits)", path, cost)
-        headers = {"Authorization": f"Bearer {self._key.reveal()}"}
+        # Raised outside the `except`, so the error keeps no reference to the
+        # httpx exception and its request (which carries the key).
+        response: httpx.Response | None = None
+        failure = ""
         try:
-            response = self._http.get(path, params=params, headers=headers)
+            response = self._http.get(path, params=params)
         except httpx.TimeoutException:
-            raise ProviderUnavailable(reason="PokéPrice timed out") from None
+            failure = "PokéPrice timed out"
         except httpx.HTTPError as error:
-            reason = f"PokéPrice request failed ({type(error).__name__})"
-            raise ProviderUnavailable(reason=reason) from None
+            failure = f"PokéPrice request failed ({type(error).__name__})"
+        if response is None:
+            raise ProviderUnavailable(reason=failure)
 
         status = response.status_code
         if status == 429:
             raise self._rate_limited(response)
         if status in (401, 403):
             self._disabled = f"PokéPrice rejected the API key (HTTP {status})"
-            self._key = None
             logger.warning("%s; not asking PokéPrice again this run", self._disabled)
             raise ProviderUnavailable(reason=self._disabled)
         if status == 404 and missing_ok:
@@ -383,13 +449,16 @@ class PokePriceProvider:
         return body
 
     def _rate_limited(self, response: httpx.Response) -> ProviderUnavailable:
-        """The error for a 429, exhausting today's budget on a daily limit."""
+        """The error for a 429, exhausting today's budget on a daily limit
+        (or, when the body names no limit type, a wait over an hour)."""
         body = _json(response) or {}
         now = self._budget.now()
         retry_after = _retry_after(response.headers.get("Retry-After"), now)
         if retry_after is None:
             retry_after = _aware(body.get("resetsAt"))
-        if body.get("limitType") == "daily":
+        limit_type = body.get("limitType")
+        long_wait = retry_after is not None and retry_after - now > DAILY_LIMIT_WAIT
+        if limit_type == "daily" or (limit_type is None and long_wait):
             self._budget.exhaust(NAME)
             if retry_after is None:
                 retry_after = self._budget.resets_at()
@@ -408,6 +477,24 @@ class PokePriceProvider:
 
 
 # --- matching ----------------------------------------------------------------
+
+
+def _lookup(identity: CardIdentity) -> _Lookup | None:
+    """How to look `identity` up, or None if it has no set or nothing to
+    search for."""
+    set_query = _set_query(identity)
+    words = (identity.card_name, identity.set_number)
+    search = " ".join(word for word in words if word is not None)
+    if set_query is None or not search:
+        return None
+    language = identity.language.value
+    return _Lookup(
+        language=language,
+        set_query=set_query,
+        search=search,
+        set_key=f"set:{language}|{_normalise(set_query)}",
+        card_key=_card_key(identity, set_query),
+    )
 
 
 def _set_query(identity: CardIdentity) -> str | None:
@@ -437,14 +524,15 @@ def _card_key(identity: CardIdentity, set_query: str) -> str:
     return "card:" + "|".join(parts)
 
 
-def _choose_set(sets: list[Json], set_query: str) -> str | None:
-    """The id of the set whose name is `set_query`, else of the first set."""
+def _choose_set(sets: list[Json], set_query: str) -> tuple[str | None, bool]:
+    """The id of the set named `set_query` and True, else the first set's id
+    and False (to be trusted only once a card matches in it)."""
     usable = [(s, set_id) for s in sets if (set_id := _set_id_of(s)) is not None]
     wanted = _normalise(set_query)
     for found, set_id in usable:
         if _normalise(str(found.get("name") or "")) == wanted:
-            return set_id
-    return usable[0][1] if usable else None
+            return set_id, True
+    return (usable[0][1], False) if usable else (None, False)
 
 
 def _set_id_of(found: Json) -> str | None:
@@ -460,23 +548,37 @@ def _set_id_of(found: Json) -> str | None:
 
 
 def _match_card(cards: list[Json], identity: CardIdentity) -> str | None:
-    """The tcgPlayerId of the search result that is the card.
+    """The tcgPlayerId of the search result that is the card, or None.
 
-    With a number, a result must have the same number (ignoring "/total",
-    case and leading zeros); among several, the one whose name contains the
-    card's name words wins, and an unresolved tie matches nothing. Without
-    a number, the first result whose name contains the card's name words.
+    A result must have the card's number (ignoring "/total", case and
+    leading zeros) and contain its name's words. A card number alone can't
+    tell cards apart, so a card without a name needs exactly one match.
     """
-    usable = [c for c in cards if _tcg_player_id_of(c) is not None]
-    named = [c for c in usable if _name_matches(identity.card_name, c.get("name"))]
-    if identity.set_number is not None:
-        wanted = _number_key(identity.set_number)
-        numbered = [c for c in usable if _number_key(c.get("cardNumber")) == wanted]
-        both = [c for c in numbered if c in named]
-        if both:
-            return _tcg_player_id_of(both[0])
-        return _tcg_player_id_of(numbered[0]) if len(numbered) == 1 else None
-    return _tcg_player_id_of(named[0]) if named else None
+    matches = [
+        card
+        for card in cards
+        if _tcg_player_id_of(card) is not None
+        and _same_card(card, identity, strict=True)
+    ]
+    if not matches or (identity.card_name is None and len(matches) > 1):
+        return None
+    return _tcg_player_id_of(matches[0])
+
+
+def _same_card(card: Json, identity: CardIdentity, *, strict: bool) -> bool:
+    """Whether a PokéPrice card has `identity`'s name words and number (each
+    checked when the identity has it). Unless `strict`, a field the card
+    leaves out is not held against it."""
+    checks = (
+        (identity.card_name, card.get("name"), _name_matches),
+        (identity.set_number, card.get("cardNumber"), _same_number),
+    )
+    for wanted, found, same in checks:
+        if wanted is None or (found is None and not strict):
+            continue
+        if not same(wanted, found):
+            return False
+    return True
 
 
 def _tcg_player_id_of(card: Json) -> str | None:
@@ -487,11 +589,18 @@ def _tcg_player_id_of(card: Json) -> str | None:
     return text if _ID_PATTERN.fullmatch(text) else None
 
 
-def _name_matches(card_name: str | None, candidate: object) -> bool:
-    if card_name is None or not isinstance(candidate, str):
+def _name_matches(card_name: str, candidate: object) -> bool:
+    """Whether every word of `card_name` is in `candidate`, so "Umbreon VMAX"
+    matches "Umbreon VMAX (Alternate Art Secret)"."""
+    if not isinstance(candidate, str):
         return False
     wanted = _normalise(card_name).split()
     return bool(wanted) and set(wanted) <= set(_normalise(candidate).split())
+
+
+def _same_number(number: str, candidate: object) -> bool:
+    wanted = _number_key(number)
+    return wanted is not None and _number_key(candidate) == wanted
 
 
 def _number_key(number: object) -> str | None:
@@ -504,10 +613,12 @@ def _number_key(number: object) -> str | None:
 
 
 def _normalise(text: str) -> str:
-    """Lower case without accents, "/" as "&", other punctuation as spaces."""
+    """Lower case without accents, "/" as "&" and "&" a word of its own
+    ("Greninja/Zoroark GX" and "Greninja & Zoroark-GX" read alike), other
+    punctuation as spaces."""
     decomposed = unicodedata.normalize("NFKD", text)
     plain = "".join(c for c in decomposed if not unicodedata.combining(c))
-    plain = plain.casefold().replace("/", "&")
+    plain = plain.casefold().replace("/", "&").replace("&", " & ")
     words = "".join(c if c.isalnum() or c == "&" else " " for c in plain)
     return " ".join(words.split())
 

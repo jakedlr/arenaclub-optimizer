@@ -92,6 +92,13 @@ class ValueProvider(Protocol):
     the cache and credit budget are keyed by it. `credit_cost` is what one
     `quote` can cost in credits at most (0 means free).
 
+    A provider may also define `estimated_cost(identity) -> int`: what
+    quoting that identity would cost now, e.g. less once the provider has
+    cached its own id for the card. It must not make requests or spend.
+    When it is defined, the resolver checks the budget against it instead
+    of `credit_cost`; the provider's own `spend_or_raise` before each
+    request stays the hard limit, so an underestimate can't overspend.
+
     `quote` returns a ValueQuote, NotFound or Unmatched. A grade of None in
     the identity asks for the raw (ungraded) value. It raises
     ProviderUnavailable when a limit is reached or the provider is down.

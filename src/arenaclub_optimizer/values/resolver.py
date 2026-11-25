@@ -101,7 +101,8 @@ def resolve_values(
     2. a fresh cached quote from one of `providers`, in provider order;
     3. each provider in turn, skipping one with a fresh cached NotFound or
        Unmatched, one that raised ProviderUnavailable earlier in the call,
-       and one whose `credit_cost` the budget can't cover. Every answer is
+       and one whose cost the budget can't cover (its `estimated_cost` for
+       the card if it has one, else its `credit_cost`). Every answer is
        cached;
     4. a stale cached quote, at most `stale_max_age` old, from a provider
        skipped in step 3 for budget or unavailability, returned at low
@@ -246,7 +247,7 @@ class _Run:
             if entry is not None and entry.fresh:
                 asked.causes.append((provider.name, _negative_cause(entry.result, raw)))
                 continue
-            skip = self._cannot_ask(provider)
+            skip = self._cannot_ask(provider, identity)
             if skip is None:
                 try:
                     result = provider.quote(identity)
@@ -266,12 +267,18 @@ class _Run:
             asked.causes.append((provider.name, _negative_cause(result, raw)))
         return asked
 
-    def _cannot_ask(self, provider: ValueProvider) -> str | None:
-        """Why `provider` can't be asked now, or None if it can."""
+    def _cannot_ask(
+        self, provider: ValueProvider, identity: CardIdentity
+    ) -> str | None:
+        """Why `provider` can't be asked about `identity` now, or None if it
+        can. The budget must cover the provider's `estimated_cost` for the
+        identity if it has one, else its `credit_cost`."""
         stopped = self.unavailable.get(provider.name)
         if stopped is not None:
             return str(stopped)
-        if not self.budget.can_spend(provider.name, provider.credit_cost, now=self.now):
+        estimate = getattr(provider, "estimated_cost", None)
+        cost = provider.credit_cost if estimate is None else estimate(identity)
+        if not self.budget.can_spend(provider.name, cost, now=self.now):
             return str(self.budget.exhausted_error(now=self.now))
         return None
 
