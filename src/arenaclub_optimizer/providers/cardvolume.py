@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -37,7 +38,8 @@ from arenaclub_optimizer.values.quote import (
 )
 
 NAME = "cardvolume"
-BASE_URL = "https://cardvolume.com/api/v1"
+SITE_URL = "https://cardvolume.com"
+BASE_URL = f"{SITE_URL}/api/v1"
 INDEX_FILENAME = "cardvolume-cards.json"
 INDEX_MAX_AGE = timedelta(days=1)
 DEFAULT_MIN_INTERVAL = 1.0
@@ -125,12 +127,15 @@ class CardVolumeProvider:
         Unmatched when the index has no such card (or its page is a 404).
         NotFound when the card is known but has no usable figure at the grade,
         or the identity is ungraded (CardVolume prices graded cards only).
+        A promo matched without checking its year (see `match_card`) is
+        quoted at low confidence.
         Raises ProviderUnavailable on a 403, 429, 5xx, network failure or an
         unusable response.
         """
-        entry = match_card(self._index_cards(), identity)
-        if entry is None:
+        match = _match(self._index_cards(), identity)
+        if match is None:
             return Unmatched()
+        entry, unsure_match = match
         if identity.grader is None or identity.grade is None:
             return NotFound()
         card = self._card(entry["id"])
@@ -143,23 +148,28 @@ class CardVolumeProvider:
         if found is None:
             return NotFound()
         grade, uncertain = found
-        return self._grade_quote(card, grade, uncertain=uncertain)
+        return self._grade_quote(
+            card, entry, grade, uncertain=uncertain or unsure_match
+        )
 
-    def _grade_quote(self, card: Json, grade: Json, *, uncertain: bool) -> QuoteResult:
-        """The quote for one `grades[]` entry. `uncertain` lowers a market
-        price to low confidence (see `_grade_entry`)."""
-        citation = card.get("cite_as") if isinstance(card.get("cite_as"), str) else None
+    def _grade_quote(
+        self, card: Json, entry: Json, grade: Json, *, uncertain: bool
+    ) -> QuoteResult:
+        """The quote for one `grades[]` entry of `card` (whose index entry is
+        `entry`). `uncertain` lowers a market price to low confidence (see
+        `_grade_entry`). Every quote carries a citation (see `_citation`)."""
         market = _price(grade.get("market_price_usd"))
         if market is not None:
             as_of = _date(card.get("as_of")) or _date(card.get("updated"))
+            as_of = as_of or self._utc_now().date()
             sales = grade.get("market_sales_n")
             return ValueQuote(
                 market_value=market,
                 source=NAME,
-                as_of=as_of or self._utc_now().date(),
+                as_of=as_of,
                 sales_count=sales if _is_count(sales) else None,
                 confidence=(ValueConfidence.LOW if uncertain else ValueConfidence.HIGH),
-                citation=citation,
+                citation=_citation(card, entry, grade, market, as_of),
             )
         # Under 5 sales in 90 days CardVolume gives no market price; its docs
         # say to quote the last verified sale with its date instead.
@@ -173,7 +183,7 @@ class CardVolumeProvider:
                     as_of=when,
                     sales_count=1,
                     confidence=ValueConfidence.LOW,
-                    citation=citation,
+                    citation=_citation(card, entry, grade, price, when),
                 )
         return NotFound()
 
@@ -286,10 +296,19 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
     before an "EX"/"GX" suffix, leading zeros and a "/total" suffix are
     ignored. An identity whose set is just "Promo" (Arena Club's subset name
     for promos) matches any set with "promo" or "promos" in its name, but then
-    the year must agree too when both sides give one: promo numbers repeat
-    across eras. The language must agree, and an entry whose id isn't a safe
-    path is never matched.
+    the year must agree too when both sides give one, compared as numbers
+    even when the index gives it as text: promo numbers repeat across eras.
+    The language must agree, and an entry whose id isn't a safe path is never
+    matched.
     """
+    match = _match(cards, identity)
+    return None if match is None else match[0]
+
+
+def _match(cards: Iterable[Any], identity: CardIdentity) -> tuple[Json, bool] | None:
+    """`match_card`'s entry, and whether the match is unsure: a promo whose
+    year couldn't be checked, because either side gives none or the index
+    gives it as text rather than a number."""
     name = _text_key(identity.card_name)
     set_key = _text_key(identity.insert or identity.subset_name)
     number = _number_key(identity.set_number)
@@ -303,13 +322,15 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
         card_id = entry.get("id")
         if not (isinstance(card_id, str) and _CARD_ID.fullmatch(card_id)):
             continue
-        if (
+        if not (
             _text_key(entry.get("name")) == name
             and _number_key(entry.get("number")) == number
-            and _same_set(set_key, entry, identity.year)
             and str(entry.get("language") or "English").casefold().startswith(language)
         ):
-            matches.append(entry)
+            continue
+        same_set = _same_set(set_key, entry, identity.year)
+        if same_set is not None:
+            matches.append((entry, same_set is _SetMatch.UNSURE))
     if len(matches) > 1:
         logger.info(
             "CardVolume: %d index entries match %s, leaving it unmatched",
@@ -320,14 +341,37 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
     return matches[0] if matches else None
 
 
-def _same_set(wanted: str, entry: Json, year: int | None) -> bool:
+class _SetMatch(Enum):
+    SURE = "sure"
+    # A promo set whose year couldn't be checked.
+    UNSURE = "unsure"
+
+
+def _same_set(wanted: str, entry: Json, year: int | None) -> _SetMatch | None:
+    """How `entry`'s set matches the wanted set key, or None if it doesn't."""
     offered = _text_key(entry.get("set"))
     if wanted != _PROMO:
-        return wanted == offered
+        return _SetMatch.SURE if wanted == offered else None
     if not _PROMO_WORDS.intersection(offered.split()):
-        return False
-    entry_year = entry.get("year")
-    return year is None or not isinstance(entry_year, int) or entry_year == year
+        return None
+    raw_year = entry.get("year")
+    entry_year = _year(raw_year)
+    if year is None or entry_year is None:
+        return _SetMatch.UNSURE
+    if entry_year != year:
+        return None
+    return _SetMatch.SURE if isinstance(raw_year, int) else _SetMatch.UNSURE
+
+
+def _year(value: object) -> int | None:
+    """An index year as a number: an int, or whole-number text; else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 def _text_key(value: object) -> str:
@@ -386,6 +430,37 @@ def _same_grade(offered: str, wanted: str) -> bool:
         return Decimal(offered.strip()) == Decimal(wanted.strip())
     except InvalidOperation:
         return offered.strip().casefold() == wanted.strip().casefold()
+
+
+def _citation(card: Json, entry: Json, grade: Json, figure: float, as_of: date) -> str:
+    """The attribution CardVolume asks for whenever one of its figures is
+    used: the card's own `cite_as`, else one built from the card, its grade,
+    the figure, its date and the card's URL, e.g. "Umbreon VMAX 215/203
+    (Evolving Skies), PSA 10: $3,800.00 as of 2026-11-24. CardVolume,
+    https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/".
+    Card fields fall back to the index entry's, and the URL to the card's
+    path on cardvolume.com."""
+    cite_as = card.get("cite_as")
+    if isinstance(cite_as, str) and cite_as.strip():
+        return cite_as
+
+    def text(key: str) -> str | None:
+        for source in (card, entry):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.split())
+        return None
+
+    name = " ".join(part for part in (text("name"), text("number")) if part)
+    set_name = text("set")
+    if set_name:
+        name = f"{name} ({set_name})" if name else set_name
+    label = grade.get("label")
+    if not (isinstance(label, str) and label.strip()):
+        label = f"{grade['grader']} {grade['grade']}"
+    head = ", ".join(part for part in (name, label) if part)
+    url = text("url") or f"{SITE_URL}/{entry['id']}/"
+    return f"{head}: ${figure:,.2f} as of {as_of.isoformat()}. CardVolume, {url}"
 
 
 def _price(value: object) -> float | None:

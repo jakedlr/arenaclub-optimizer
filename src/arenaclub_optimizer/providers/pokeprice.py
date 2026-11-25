@@ -68,6 +68,8 @@ RAW_LOOKUP_COST = cards_cost(1, ebay=False)
 # The most one quote can cost: resolving the set and the card, then pricing it.
 CREDIT_COST = SET_SEARCH_COST + CARD_SEARCH_COST + PRICED_LOOKUP_COST
 
+# The credits PokéPrice says a response cost (docs/research/value-apis.md).
+CALLS_CONSUMED_HEADER = "X-API-Calls-Consumed"
 # A 429 that names no limit type but asks us to wait longer than this is
 # taken as the daily limit.
 DAILY_LIMIT_WAIT = timedelta(hours=1)
@@ -79,7 +81,8 @@ GRADERS = frozenset({"psa", "cgc", "bgs", "sgc", "tag", "ace"})
 # Printable ASCII with no spaces; anything else can't go in a header as is.
 _KEY_PATTERN = re.compile(r"[\x21-\x7e]+")
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
-_DELTA_SECONDS = re.compile(r"[0-9]+")
+# A whole number of at least 0, e.g. `Retry-After` seconds.
+_WHOLE_NUMBER = re.compile(r"[0-9]+")
 _LEADING_ZEROS = re.compile(r"(?<![0-9])0+(?=[0-9])")
 _YEAR = re.compile(r"[0-9]{4}")
 # Subsets that don't name a set, so the set comes from `set_name` instead.
@@ -158,9 +161,10 @@ class PokePriceProvider:
     """A ValueProvider backed by PokéPrice Tracker's v2 API.
 
     `api_key` None (or blank) leaves the provider disabled: every quote raises
-    ProviderUnavailable("PokéPrice key not set") without a request. A 401 or
-    403 disables it for the rest of the run. Requests carry an honest
-    user-agent and are spaced at least `min_interval` seconds apart.
+    ProviderUnavailable("PokéPrice key not set", lasting) without a request. A
+    401 or 403 disables it for the rest of the run, also lasting. Requests
+    carry an honest user-agent and are spaced at least `min_interval`
+    seconds apart.
 
     Each request first spends its credits from `budget`. The set id (keyed by
     set name and language) and the card's tcgPlayerId are kept in `cache`'s
@@ -249,7 +253,7 @@ class PokePriceProvider:
         request) or BudgetExhausted.
         """
         if self._disabled is not None:
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         grade_key = None
         if identity.grade is not None:
             grade_key = _grade_key(identity.grader, identity.grade)
@@ -413,7 +417,7 @@ class PokePriceProvider:
         """GET `path`, spending `cost` credits first. None for a 404 when
         `missing_ok`; ProviderUnavailable for any other failure."""
         if self._disabled is not None:  # e.g. by a 401 earlier in the run
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         self._budget.spend_or_raise(NAME, cost)
         self._spacer.wait()
         logger.debug("PokéPrice GET %s (%d credits)", path, cost)
@@ -436,11 +440,12 @@ class PokePriceProvider:
         if status in (401, 403):
             self._disabled = f"PokéPrice rejected the API key (HTTP {status})"
             logger.warning("%s; not asking PokéPrice again this run", self._disabled)
-            raise ProviderUnavailable(reason=self._disabled)
+            raise ProviderUnavailable(reason=self._disabled, lasting=True)
         if status == 404 and missing_ok:
             return None
         if not response.is_success:
             raise ProviderUnavailable(reason=f"PokéPrice HTTP {status} on {path}")
+        _log_server_charge(response, path, cost)
         body = _json(response)
         if body is None:
             raise ProviderUnavailable(reason=f"PokéPrice sent an unusable {path} body")
@@ -464,6 +469,24 @@ class PokePriceProvider:
                 retry_after, reason="PokéPrice daily limit reached"
             )
         return ProviderUnavailable(retry_after, reason="PokéPrice rate limited")
+
+
+def _log_server_charge(response: httpx.Response, path: str, cost: int) -> None:
+    """Log at DEBUG when PokéPrice's `X-API-Calls-Consumed` differs from the
+    credits spent locally for the request, so a billing surprise shows up.
+    The budget keeps the local figure: the server's isn't verified yet."""
+    header = response.headers.get(CALLS_CONSUMED_HEADER, "").strip()
+    if not _WHOLE_NUMBER.fullmatch(header):
+        return
+    charged = int(header)
+    if charged != cost:
+        logger.debug(
+            "PokéPrice %s: %s is %d, local spend was %d credits",
+            path,
+            CALLS_CONSUMED_HEADER,
+            charged,
+            cost,
+        )
 
 
 # --- matching ----------------------------------------------------------------
@@ -541,8 +564,10 @@ def _match_card(cards: list[Json], identity: CardIdentity) -> str | None:
     """The tcgPlayerId of the search result that is the card, or None.
 
     A result must have the card's number (ignoring "/total", case and
-    leading zeros) and contain its name's words. A card number alone can't
-    tell cards apart, so a card without a name needs exactly one match.
+    leading zeros) and contain its name's words. A result whose whole name
+    is the card's name wins over one that only contains its words, so
+    "Charizard" picks Charizard over Dark Charizard. A card number alone
+    can't tell cards apart, so a card without a name needs exactly one match.
     """
     matches = [
         card
@@ -552,6 +577,10 @@ def _match_card(cards: list[Json], identity: CardIdentity) -> str | None:
     ]
     if not matches or (identity.card_name is None and len(matches) > 1):
         return None
+    if identity.card_name is not None:
+        wanted = _normalise(identity.card_name)
+        exact = [c for c in matches if _normalise(str(c.get("name"))) == wanted]
+        matches = exact or matches
     return _tcg_player_id_of(matches[0])
 
 
@@ -694,7 +723,7 @@ def _aware(value: object) -> datetime | None:
 
 def _retry_after(value: str | None, now: datetime) -> datetime | None:
     """When a `Retry-After` of delta-seconds ends, or None."""
-    if value is None or not _DELTA_SECONDS.fullmatch(value.strip()):
+    if value is None or not _WHOLE_NUMBER.fullmatch(value.strip()):
         return None
     return now + timedelta(seconds=int(value.strip()))
 

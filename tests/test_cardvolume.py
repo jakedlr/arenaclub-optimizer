@@ -786,6 +786,78 @@ def test_the_plural_promos_wildcard_still_needs_year_and_number():
     )
 
 
+# --- review follow-ups: an unchecked promo year ------------------------------
+
+
+def index_with_mega(server: Server, **changes) -> None:
+    """Serve the index with the Mega Charizard promo entry changed; a change
+    to None removes the key."""
+
+    def changed(card: dict) -> dict:
+        if not card["id"].endswith("mega-charizard-x-ex-023"):
+            return card
+        merged = {**card, **changes}
+        return {k: v for k, v in merged.items() if v is not None}
+
+    server.index = {**INDEX, "cards": [changed(card) for card in INDEX_CARDS]}
+
+
+def test_a_promo_matched_without_the_identitys_year_is_low_confidence(provider):
+    result = provider.quote(mega_identity(year=None))
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 132.5
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_matched_without_the_index_year_is_low_confidence(tmp_path, server):
+    index_with_mega(server, year=None)
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(mega_identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_whose_index_year_is_a_matching_string_is_low_confidence(
+    tmp_path, server
+):
+    index_with_mega(server, year="2025")
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(mega_identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_whose_index_year_is_another_years_string_is_unmatched(
+    tmp_path, server
+):
+    index_with_mega(server, year="2023")
+    with make_provider(tmp_path, server) as provider:
+        assert provider.quote(mega_identity()) == Unmatched()
+
+
+def test_match_card_compares_a_string_year_as_a_number():
+    wotc = {**WOTC_PIKACHU, "year": " 2000 "}
+    assert match_card([wotc], promo_identity("Pikachu", "27", 2023)) is None
+    found = match_card([wotc], promo_identity("Pikachu", "27", 2000))
+    assert found is not None
+    assert found["id"] == WOTC_PIKACHU["id"]
+
+
+def test_a_promo_matched_on_both_years_stays_high_confidence(provider):
+    result = provider.quote(mega_identity())
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.HIGH
+
+
+def test_a_named_set_without_a_year_stays_high_confidence(provider):
+    result = provider.quote(identity(year=None))
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.HIGH
+
+
 # --- review follow-ups: confidence -------------------------------------------
 
 
@@ -900,3 +972,116 @@ def test_a_refused_refresh_still_raises_and_backs_off(tmp_path, server, status):
                 p.quote(identity())
         assert not budget.can_spend("cardvolume", 0)
     assert server.paths() == [INDEX_PATH]
+
+
+# --- unavailability is temporary -------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_cardvolume_unavailability_is_temporary(tmp_path, server, status):
+    server.routes[UMBREON_PATH] = httpx.Response(status, text="busy")
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable) as caught:
+            provider.quote(identity())
+
+    assert caught.value.lasting is False
+
+
+# --- attribution without cite_as ---------------------------------------------------
+
+UMBREON_URL = "https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/"
+
+
+def serve_umbreon(server: Server, card: dict) -> None:
+    server.routes[UMBREON_PATH] = lambda: httpx.Response(200, json=card)
+
+
+def without_cite_as() -> dict:
+    card = fixture(f"{UMBREON}.json")
+    del card["cite_as"]
+    return card
+
+
+def test_a_missing_cite_as_is_built_from_the_url_grade_figure_and_date(
+    tmp_path, server
+):
+    serve_umbreon(server, without_cite_as())
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.citation == (
+        "Umbreon VMAX 215/203 (Evolving Skies), PSA 10: $3,800.00 as of "
+        f"2026-11-24. CardVolume, {UMBREON_URL}"
+    )
+
+
+def test_a_cite_as_that_is_not_text_is_replaced_too(tmp_path, server):
+    card = fixture(f"{UMBREON}.json")
+    card["cite_as"] = {"text": "odd"}
+    serve_umbreon(server, card)
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.citation is not None
+    assert result.citation.endswith(f"CardVolume, {UMBREON_URL}")
+
+
+def test_a_built_citation_for_a_last_sale_gives_the_sale_and_its_date(tmp_path, server):
+    serve_umbreon(server, without_cite_as())
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity(grade="7"))
+
+    assert isinstance(result, ValueQuote)
+    assert result.citation == (
+        "Umbreon VMAX 215/203 (Evolving Skies), PSA 7: $1,677.70 as of "
+        f"2026-09-20. CardVolume, {UMBREON_URL}"
+    )
+
+
+def test_a_built_citation_without_a_card_url_uses_the_index_url(tmp_path, server):
+    card = without_cite_as()
+    del card["url"]
+    serve_umbreon(server, card)
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.citation is not None
+    assert result.citation.endswith(f"CardVolume, {UMBREON_URL}")
+
+
+def test_a_built_citation_without_any_url_uses_the_cards_path(tmp_path, server):
+    card = without_cite_as()
+    for key in ("url", "name", "set", "number"):
+        del card[key]
+    serve_umbreon(server, card)
+    server.index = {
+        **INDEX,
+        "cards": [{k: v for k, v in c.items() if k != "url"} for c in INDEX_CARDS],
+    }
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.citation == (
+        "Umbreon VMAX 215/203 (Evolving Skies), PSA 10: $3,800.00 as of "
+        f"2026-11-24. CardVolume, {UMBREON_URL}"
+    )
+
+
+def test_every_cardvolume_quote_carries_a_citation(tmp_path, server):
+    serve_umbreon(server, without_cite_as())
+    identities = [identity(), identity(grade="9"), identity(grade="7")]
+
+    with make_provider(tmp_path, server) as provider:
+        results = [provider.quote(i) for i in identities]
+
+    assert all(isinstance(r, ValueQuote) and r.citation for r in results)

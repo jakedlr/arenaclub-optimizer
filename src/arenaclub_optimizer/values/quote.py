@@ -63,14 +63,21 @@ class ProviderUnavailable(Exception):
     rest of the run.
 
     `retry_after` is when it is worth asking again, if known (time-zone
-    aware). `reason` says why, e.g. "daily limit reached".
+    aware). `reason` says why, e.g. "daily limit reached". `lasting` is True
+    when it won't clear by itself, only through the user (e.g. no API key, or
+    a rejected one); a limit, a refusal or an outage is temporary.
     """
 
     def __init__(
-        self, retry_after: datetime | None = None, *, reason: str = "unavailable"
+        self,
+        retry_after: datetime | None = None,
+        *,
+        reason: str = "unavailable",
+        lasting: bool = False,
     ) -> None:
         self.retry_after = retry_after
         self.reason = reason
+        self.lasting = lasting
         text = reason
         if retry_after is not None:
             text += f", retry after {format_utc(retry_after)}"

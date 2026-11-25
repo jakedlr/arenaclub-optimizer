@@ -711,3 +711,83 @@ def test_apply_values_keeps_card_order_and_identity(cache, budget):
 
     assert [card.card_id for card in valued.checklist] == ["card_a", "card_b"]
     assert valued.checklist[1].identity == b.identity
+
+
+# --- waiting cards -------------------------------------------------------------
+
+
+def waiting(resolution: ValueResolution) -> dict[str, bool]:
+    return {item.card_id: item.waiting for item in resolution.needs_review}
+
+
+def test_provider_unavailable_is_temporary_unless_marked_lasting():
+    assert ProviderUnavailable().lasting is False
+    assert ProviderUnavailable(reason="key not set", lasting=True).lasting is True
+    assert BudgetExhausted(datetime(2026, 11, 25, tzinfo=UTC)).lasting is False
+
+
+def test_a_card_skipped_for_budget_is_waiting(cache):
+    budget = CreditBudget(cache, {"pp": 0})
+    provider = FakeProvider("pp", credit_cost=2)
+
+    result = resolve([checklist_card("card_a")], [provider], cache, budget)
+
+    assert waiting(result) == {"card_a": True}
+
+
+def test_a_card_out_of_credits_mid_quote_is_waiting(cache):
+    budget = CreditBudget(cache, {"pp": 3}, clock=Clock())
+    provider = FakeProvider("pp", credit_cost=1, budget=budget, spends=4)
+    cards = [checklist_card("card_a"), checklist_card("card_b")]
+
+    result = resolve(cards, [provider], cache, budget)
+
+    assert waiting(result) == {"card_a": True, "card_b": True}
+
+
+def test_cards_behind_a_temporary_outage_are_waiting(cache, budget):
+    down = FakeProvider("pp", {"card_a": ProviderUnavailable(reason="HTTP 503")})
+    cards = [checklist_card("card_a"), checklist_card("card_b")]
+
+    result = resolve(cards, [down], cache, budget)
+
+    assert waiting(result) == {"card_a": True, "card_b": True}
+
+
+def test_cards_behind_a_lasting_unavailability_are_not_waiting(cache, budget):
+    no_key = ProviderUnavailable(reason="key not set", lasting=True)
+    down = FakeProvider("pp", {"card_a": no_key})
+    cards = [checklist_card("card_a"), checklist_card("card_b")]
+
+    result = resolve(cards, [down], cache, budget)
+
+    assert waiting(result) == {"card_a": False, "card_b": False}
+
+
+def test_a_card_another_provider_could_not_match_is_still_waiting(cache):
+    budget = CreditBudget(cache, {"pp": 0})
+    providers = [FakeProvider("pp", credit_cost=2), FakeProvider("cv")]
+
+    result = resolve([checklist_card("card_a")], providers, cache, budget)
+
+    assert waiting(result) == {"card_a": True}
+
+
+def test_a_card_every_provider_answered_for_is_not_waiting(cache, budget):
+    providers = [FakeProvider("pp"), FakeProvider("cv", {"card_a": NotFound()})]
+
+    result = resolve([checklist_card("card_a")], providers, cache, budget)
+
+    assert waiting(result) == {"card_a": False}
+
+
+def test_a_lasting_and_a_temporary_skip_together_are_waiting(cache):
+    budget = CreditBudget(cache, {"cv": 0})
+    no_key = FakeProvider(
+        "pp", lambda _: ProviderUnavailable(reason="key not set", lasting=True)
+    )
+    providers = [no_key, FakeProvider("cv", credit_cost=1)]
+
+    result = resolve([checklist_card("card_a")], providers, cache, budget)
+
+    assert waiting(result) == {"card_a": True}

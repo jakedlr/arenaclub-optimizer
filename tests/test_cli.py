@@ -1,11 +1,14 @@
 import json
 import re
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 from fake_arena import sample_arena
+from fake_values import NOW, Clock, FakeProvider, quote
 from typer.testing import CliRunner
 
 from arenaclub_optimizer import cli
@@ -15,6 +18,14 @@ from arenaclub_optimizer.arena_client import (
     ArenaClient,
 )
 from arenaclub_optimizer.cli import app
+from arenaclub_optimizer.model import ValueConfidence
+from arenaclub_optimizer.output import overrides_snippet
+from arenaclub_optimizer.valuation import (
+    ReviewEntry,
+    ValueSources,
+    open_value_sources,
+)
+from arenaclub_optimizer.values import CreditBudget, ProviderUnavailable, ValueCache
 
 runner = CliRunner()
 
@@ -48,8 +59,34 @@ def config_dir(tmp_path, monkeypatch) -> Path:
     return directory
 
 
+class FakeValueSources:
+    """Stands in for `open_value_sources`: a value cache in a temp dir, a
+    budget on a fixed clock, and the fake providers a test puts in
+    `providers` (none by default). The cache outlives each run, as the real
+    one does."""
+
+    def __init__(self, directory: Path) -> None:
+        self.cache = ValueCache(directory)
+        self.budget = CreditBudget(self.cache, clock=Clock(NOW))
+        self.providers: list = []
+        self.runs = 0
+
+    @contextmanager
+    def __call__(self):
+        self.runs += 1
+        yield ValueSources(tuple(self.providers), self.cache, self.budget)
+
+
 @pytest.fixture
-def arena(config_dir, monkeypatch):
+def values(tmp_path, monkeypatch):
+    fake = FakeValueSources(tmp_path / "values")
+    monkeypatch.setattr(cli, "make_value_sources", fake)
+    yield fake
+    fake.cache.close()
+
+
+@pytest.fixture
+def arena(config_dir, values, monkeypatch):
     fake = sample_arena()
     monkeypatch.setattr(cli, "make_client", lambda: fake)
     return fake
@@ -104,7 +141,8 @@ def test_rank_prints_a_table_and_the_summary_line(arena):
     assert "Gold Pokemon" in result.stdout
     assert "Gold Football" in result.stdout
     assert result.stdout.rstrip().endswith(
-        "2 ranked, 1 unrankable (low Value Coverage), 0 skipped"
+        "2 ranked, 1 unrankable (low Value Coverage), 0 skipped; "
+        "values: 4 overridden, 0 from cache, 0 fetched, 1 need review"
     )
 
 
@@ -333,10 +371,22 @@ def test_json_document_has_a_stable_shape(arena):
         "results",
         "unrankable",
         "skipped",
+        "unavailable_sources",
     }
-    assert document["version"] == 1
+    assert document["version"] == 2
     assert datetime.fromisoformat(document["generated_at"]).tzinfo is not None
-    assert document["summary"] == {"ranked": 2, "unrankable": 1, "skipped": 0}
+    assert document["summary"] == {
+        "ranked": 2,
+        "unrankable": 1,
+        "skipped": 0,
+        "values": {
+            "override": 4,
+            "cache": 0,
+            "stale_cache": 0,
+            "fetched": 0,
+            "needs_review": 1,
+        },
+    }
     assert result_ids(document) == ["gold-pokemon", "gold-football"]
 
 
@@ -366,6 +416,7 @@ def test_json_result_fields(arena):
         "top_heaviness",
         "high_variance",
         "notes",
+        "cards",
     }
     assert pokemon["rank"] == 1
     assert pokemon["slab_pack"] == "Gold Pokemon"
@@ -748,3 +799,424 @@ def test_json_output_keeps_stdout_pure_json(arena):
     result = invoke("--json")
 
     json.loads(result.stdout)
+
+
+# --- values -----------------------------------------------------------------------
+
+CITATION = (
+    "Player card_sp_2 215/203 (Evolving Skies). CardVolume, "
+    "https://cardvolume.com/pokemon/evolving-skies/player-card-sp-2/ "
+    "(accessed 2026-11-24)."
+)
+
+
+def player(card_id: str) -> str:
+    """The card name `fake_arena.card_json` gives a card."""
+    return f"Player {card_id}"
+
+
+def unavailable(reason: str, *, lasting: bool = False) -> FakeProvider:
+    error = ProviderUnavailable(reason=reason, lasting=lasting)
+    return FakeProvider("pokeprice", lambda _: error)
+
+
+def no_key() -> FakeProvider:
+    """PokéPrice without a key: unavailable until the user sets one."""
+    return unavailable("PokéPrice key not set", lasting=True)
+
+
+def cards_by_id(document: dict) -> dict[str, dict]:
+    return {c["card_id"]: c for r in document["results"] for c in r["cards"]}
+
+
+def no_overrides(config_dir: Path) -> None:
+    (config_dir / "overrides.toml").write_text("", encoding="utf-8")
+
+
+def test_the_default_value_sources_are_the_real_ones():
+    assert cli.make_value_sources is open_value_sources
+
+
+def test_overrides_win_then_pokeprice_then_cardvolume(arena, values):
+    pokeprice = FakeProvider(
+        "pokeprice",
+        {
+            player("card_gp_hit"): quote(1.0, "pokeprice"),
+            player("card_sp_2"): quote(70.0, "pokeprice"),
+        },
+    )
+    cardvolume = FakeProvider(
+        "cardvolume", {player("card_sp_2"): quote(80.0, "cardvolume")}
+    )
+    values.providers = [pokeprice, cardvolume]
+
+    cards = cards_by_id(rank_json())
+
+    assert cards["card_gp_hit"]["value"]["source"] == "override"
+    assert cards["card_gp_hit"]["market_value"] == 20000
+    assert cards["card_sp_2"]["value"]["source"] == "pokeprice"
+    assert cards["card_sp_2"]["market_value"] == 70.0
+    assert player("card_gp_hit") not in pokeprice.called_names
+    assert cardvolume.calls == []
+
+
+def test_cardvolume_values_the_cards_pokeprice_cannot(arena, values):
+    cardvolume = FakeProvider(
+        "cardvolume",
+        {player("card_sp_2"): quote(80.0, "cardvolume", citation=CITATION)},
+    )
+    values.providers = [no_key(), cardvolume]
+
+    document = rank_json()
+
+    value = cards_by_id(document)["card_sp_2"]["value"]
+    assert value["source"] == "cardvolume"
+    assert value["citation"] == CITATION
+    assert document["unavailable_sources"] == {"pokeprice": "PokéPrice key not set"}
+
+
+def test_values_are_resolved_once_per_run(arena, values):
+    down = unavailable("down")
+    values.providers = [down]
+
+    invoke()
+
+    assert len(down.calls) == 1
+    assert values.runs == 1
+
+
+def test_only_cards_of_packs_matching_the_filters_are_valued(arena, values, config_dir):
+    no_overrides(config_dir)
+    provider = FakeProvider("pokeprice")
+    values.providers = [provider]
+
+    invoke("--category", "football")
+
+    assert provider.called_names == [player("card_gf_1")]
+
+
+def test_a_limited_budget_values_grail_and_chase_cards_first(arena, values, config_dir):
+    no_overrides(config_dir)
+    values.budget = CreditBudget(values.cache, {"pokeprice": 2}, clock=Clock(NOW))
+    values.providers = [
+        FakeProvider(
+            "pokeprice",
+            lambda _: quote(10.0, "pokeprice"),
+            credit_cost=1,
+            budget=values.budget,
+        )
+    ]
+
+    document = review_document()
+
+    # Priority: the Grail card first, then by Hit Rate: Gold Football's only
+    # card (100%), Gold Pokemon's Lineup card (99.5%), Silver's two (50%).
+    waiting = [entry["card_id"] for entry in document["waiting_on_budget"]]
+    assert waiting == ["card_gp_base", "card_sp_1", "card_sp_2"]
+    assert all(
+        entry["reason"].startswith("budget exhausted")
+        for entry in document["waiting_on_budget"]
+    )
+    assert document["needs_review"] == []
+
+
+def test_the_summary_line_counts_values_from_cache_fetched_and_to_review(arena, values):
+    values.providers = [
+        FakeProvider("pokeprice", {player("card_sp_2"): quote(70.0, "pokeprice")})
+    ]
+
+    first = invoke().stdout
+    second = invoke().stdout
+
+    assert "; values: 4 overridden, 0 from cache, 1 fetched, 0 need review" in first
+    assert "; values: 4 overridden, 1 from cache, 0 fetched, 0 need review" in second
+
+
+def test_the_summary_line_without_overrides_or_providers(arena, config_dir):
+    no_overrides(config_dir)
+
+    stdout = invoke().stdout
+
+    assert stdout.rstrip().endswith(
+        "0 ranked, 3 unrankable (low Value Coverage), 0 skipped; "
+        "values: 0 from cache, 0 fetched, 5 need review"
+    )
+
+
+def test_json_output_prints_the_summary_line_with_values_to_stderr(arena):
+    result = invoke("--json")
+
+    assert "values: 4 overridden, 0 from cache, 0 fetched, 1 need review" in (
+        result.stderr
+    )
+
+
+def test_a_low_confidence_value_gets_a_note(arena, values):
+    low = quote(70.0, "pokeprice", confidence=ValueConfidence.LOW)
+    values.providers = [FakeProvider("pokeprice", {player("card_sp_2"): low})]
+
+    stdout = plain(invoke().stdout)
+    document = rank_json()
+
+    assert "Silver Pokemon: 1 card valued at low confidence." in stdout
+    [silver] = [r for r in document["results"] if r["pack_id"] == "silver-pokemon"]
+    assert "1 card valued at low confidence." in silver["notes"]
+    assert cards_by_id(document)["card_sp_2"]["value"]["confidence"] == "low"
+
+
+def test_cardvolume_citations_appear_in_a_sources_footer(arena, values):
+    values.providers = [
+        FakeProvider(
+            "cardvolume",
+            {player("card_sp_2"): quote(70.0, "cardvolume", citation=CITATION)},
+        )
+    ]
+
+    lines = plain(invoke().stdout).splitlines()
+
+    start = lines.index("Sources:")
+    assert lines[start + 1] == f"- {CITATION}"
+    assert lines[-1].startswith("3 ranked")
+
+
+def test_no_sources_footer_without_citations(arena):
+    assert "Sources:" not in invoke().stdout
+
+
+def test_an_unavailable_value_source_is_reported(arena, values):
+    values.providers = [no_key()]
+
+    stdout = plain(invoke().stdout)
+
+    assert "Value source unavailable: pokeprice (PokéPrice key not set)" in stdout
+
+
+def test_a_value_cache_that_cannot_open_exits_1(arena, monkeypatch):
+    def broken():
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(cli, "make_value_sources", broken)
+
+    result = invoke()
+
+    assert result.exit_code == 1
+    assert "value cache" in result.stderr
+    assert "unable to open database file" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+# --- arena review -------------------------------------------------------------------
+
+
+def review(*args: str, env: dict[str, str] | None = None):
+    return runner.invoke(app, ["review", *args], env=env or WIDE)
+
+
+def review_document(*args: str) -> dict:
+    result = review("--json", *args)
+    assert result.exit_code == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def reviewed_ids(*args: str) -> list[str]:
+    return [entry["card_id"] for entry in review_document(*args)["needs_review"]]
+
+
+def review_entries() -> list[ReviewEntry]:
+    return [
+        ReviewEntry(**{**entry, "slab_packs": tuple(entry["slab_packs"])})
+        for entry in review_document()["needs_review"]
+    ]
+
+
+def test_review_lists_each_card_without_a_value(arena):
+    result = review()
+
+    assert result.exit_code == 0, result.stderr
+    stdout = plain(result.stdout)
+    for cell in ["card_sp_2", "Player card_sp_2", "no value providers"]:
+        assert cell in stdout
+    assert stdout.rstrip().endswith("1 card needs review")
+
+
+def test_review_shows_the_cert_number(arena, config_dir):
+    no_overrides(config_dir)
+
+    stdout = plain(review().stdout)
+
+    assert "11111111" in stdout
+    assert stdout.rstrip().endswith("5 cards need review")
+
+
+@pytest.mark.parametrize("columns", ["250", "40"])
+def test_review_prints_the_overrides_snippet_unwrapped(arena, config_dir, columns):
+    no_overrides(config_dir)
+
+    stdout = plain(review(env={"COLUMNS": columns}).stdout)
+
+    assert overrides_snippet(review_entries()) in stdout
+    assert str(config_dir / "overrides.toml") in stdout.replace("\n", "")
+
+
+def test_pasting_the_filled_in_snippet_empties_the_list(arena, config_dir):
+    no_overrides(config_dir)
+    snippet = overrides_snippet(review_entries())
+    filled = snippet.replace("# market_value =", "market_value = 10")
+    (config_dir / "overrides.toml").write_text(filled, encoding="utf-8")
+
+    result = review()
+
+    assert review_document()["needs_review"] == []
+    assert "No cards need review." in result.stdout
+    assert result.stdout.rstrip().endswith("0 cards need review")
+
+
+def test_review_json(arena):
+    document = review_document()
+
+    assert document["version"] == 1
+    assert document["summary"] == {"needs_review": 1, "waiting_on_budget": 0}
+    assert document["needs_review"] == [
+        {
+            "card_id": "card_sp_2",
+            "cert_number": None,
+            "label": "2021 Pokemon SWSH Evolving Skies Player card_sp_2 #215 PSA 10",
+            "reason": "no value providers",
+            "slab_packs": ["Silver Pokemon"],
+        }
+    ]
+
+
+def test_review_json_keeps_stdout_pure_json(arena):
+    result = review("--json")
+
+    json.loads(result.stdout)
+    assert "1 card needs review" in result.stderr
+
+
+def test_review_reports_unavailable_value_sources(arena, values):
+    values.providers = [no_key()]
+
+    stdout = plain(review().stdout)
+    document = review_document()
+
+    assert "Value source unavailable: pokeprice (PokéPrice key not set)" in stdout
+    assert document["unavailable_sources"] == {"pokeprice": "PokéPrice key not set"}
+    assert document["needs_review"][0]["reason"] == "PokéPrice key not set"
+
+
+def test_review_takes_the_slab_pack_filters_of_rank(arena, config_dir):
+    no_overrides(config_dir)
+
+    assert reviewed_ids("--category", "football") == ["card_gf_1"]
+    assert reviewed_ids("--price-max", "60") == ["card_sp_1", "card_sp_2"]
+    assert reviewed_ids("--price-min", "60", "--category", "Pokémon") == [
+        "card_gp_hit",
+        "card_gp_base",
+    ]
+
+
+def test_review_uses_the_config_file_filters(arena, config_dir):
+    no_overrides(config_dir)
+    write_config(config_dir, '[filters]\ncategories = ["Football"]\n')
+
+    assert reviewed_ids() == ["card_gf_1"]
+
+
+def test_review_fetches_only_the_cards_of_matching_packs(arena):
+    review("--category", "football")
+
+    assert arena.requested("card") == ["card_gf_1"]
+
+
+def test_review_rejects_invalid_options_before_any_request(arena):
+    result = review("--price-min", "50", "--price-max", "10")
+
+    assert result.exit_code == 2
+    assert "--price-min" in result.stderr
+    assert arena.calls == []
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_review_stops_at_a_block(arena, status):
+    arena.errors[("pack", "gold-football")] = ArenaBlockedError(status, None)
+
+    result = review()
+
+    assert result.exit_code == 2
+    assert "blocked" in result.stderr.lower()
+
+
+def test_review_help_lists_its_options():
+    result = runner.invoke(app, ["review", "--help"], env=WIDE)
+
+    text = plain(result.stdout)
+    for option in ["--category", "--price-min", "--price-max", "--json"]:
+        assert option in text
+
+
+# --- arena review: cards waiting on budget -------------------------------------------
+
+
+def budget_for_two(values) -> None:
+    """PokéPrice can quote two cards, then its budget runs out: the Grail
+    card and Gold Football's card are valued, the other three wait."""
+    values.budget = CreditBudget(values.cache, {"pokeprice": 2}, clock=Clock(NOW))
+    values.providers = [
+        FakeProvider(
+            "pokeprice",
+            lambda _: quote(10.0, "pokeprice"),
+            credit_cost=1,
+            budget=values.budget,
+        )
+    ]
+
+
+def test_review_lists_cards_waiting_on_budget_in_their_own_section(
+    arena, values, config_dir
+):
+    no_overrides(config_dir)
+    budget_for_two(values)
+
+    stdout = plain(review().stdout)
+
+    assert "Waiting on budget" in stdout
+    for card_id in ["card_gp_base", "card_sp_1", "card_sp_2"]:
+        assert card_id in stdout
+    assert "budget exhausted" in stdout
+    assert stdout.rstrip().endswith("0 cards need review, 3 waiting on budget")
+
+
+def test_cards_waiting_on_budget_are_left_out_of_the_snippet(arena, values, config_dir):
+    no_overrides(config_dir)
+    budget_for_two(values)
+
+    stdout = plain(review().stdout)
+
+    assert "market_value" not in stdout
+    assert '["22222222"]' not in stdout
+    assert '["card_sp_1"]' not in stdout
+
+
+def test_a_temporarily_unavailable_source_puts_cards_in_waiting(arena, values):
+    values.providers = [unavailable("PokéPrice HTTP 503 on /sets")]
+
+    document = review_document()
+
+    assert document["needs_review"] == []
+    assert [e["card_id"] for e in document["waiting_on_budget"]] == ["card_sp_2"]
+
+
+def test_a_missing_key_still_puts_cards_up_for_review(arena, values):
+    values.providers = [no_key()]
+
+    document = review_document()
+
+    assert [e["card_id"] for e in document["needs_review"]] == ["card_sp_2"]
+    assert document["waiting_on_budget"] == []
+
+
+def test_the_snippet_header_says_to_fill_in_or_delete_each_entry(arena):
+    stdout = plain(review().stdout).replace("\n", " ")
+
+    assert "fill in each market_value or delete the entry" in stdout

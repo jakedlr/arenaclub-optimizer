@@ -4,14 +4,13 @@ Pure: no I/O and no HTTP. Vocabulary follows GLOSSARY.md; the rules are in
 docs/plan.md (Ranking, Filters, Value Coverage, Hit Rates).
 """
 
-import dataclasses
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from arenaclub_optimizer._pulls import HitRateRejectedError
 from arenaclub_optimizer.arena_mapping import PackRates
-from arenaclub_optimizer.config import Config, Filters, Overrides
+from arenaclub_optimizer.config import Config, Filters
 from arenaclub_optimizer.cost import CostModel
 from arenaclub_optimizer.ev import EVResult, evaluate_ev
 from arenaclub_optimizer.model import (
@@ -24,6 +23,7 @@ from arenaclub_optimizer.model import (
     category_key,
 )
 from arenaclub_optimizer.risk import RiskResult, evaluate_risk
+from arenaclub_optimizer.values import ValueResolution, apply_values
 
 # SkippedPack and category_key live in `model`, so that `fetch` can use them
 # without depending on ranking; they are re-exported here for callers.
@@ -33,6 +33,7 @@ __all__ = [
     "SkippedPack",
     "UnrankablePack",
     "category_key",
+    "matches_pack_filters",
     "pack_name",
     "rank",
 ]
@@ -42,7 +43,7 @@ BUYBACK_DISABLED = "Buyback offer disabled, so there is no Buyback EV"
 
 @dataclass(frozen=True)
 class RankedPack:
-    """One Top Result. `pack` has the Manual Overrides applied.
+    """One Top Result. `pack` has the resolved Market Values applied.
 
     `p_1x`, `p_2x` and `p_10x` are the probabilities that a Rip's Buyback
     proceeds reach 1x, 2x and 10x its Cost.
@@ -67,12 +68,14 @@ class UnrankablePack:
 
 @dataclass(frozen=True)
 class RankingReport:
-    """The Top Results, best first, plus the packs left out and why."""
+    """The Top Results, best first, plus the packs left out and why, and the
+    value resolution the packs were ranked with."""
 
     results: tuple[RankedPack, ...]
     unrankable: tuple[UnrankablePack, ...]
     skipped: tuple[SkippedPack, ...]
     generated_at: datetime
+    values: ValueResolution
 
 
 def pack_name(pack: SlabPack) -> str:
@@ -83,14 +86,17 @@ def pack_name(pack: SlabPack) -> str:
 def rank(
     packs_with_rates: Iterable[tuple[SlabPack, PackRates]],
     config: Config,
-    overrides: Overrides,
+    values: ValueResolution,
     *,
     skipped: Iterable[SkippedPack] = (),
     generated_at: datetime | None = None,
 ) -> RankingReport:
     """Evaluate each Slab Pack with its own rates and return the Top Results.
 
-    Packs outside the Category or price filters are dropped first, then
+    Each card's Market Value and confidence come from `values` (see
+    `values.resolve_values`, which also applies the Manual Overrides); a card
+    it has no value for keeps its own. Packs outside the Category or price
+    filters are dropped first, then
     inactive (sold-out) packs. A pack with Buyback disabled, or whose Hit Rates
     are rejected or unusable, goes under `skipped`; one below Value Coverage
     goes under `unrankable`. The rest are filtered on EV %, P(profit) and the
@@ -106,12 +112,12 @@ def rank(
     skips = list(skipped)
 
     for pack, rates in packs_with_rates:
-        if not _matches_pack_filters(pack, filters) or not pack.active:
+        if not matches_pack_filters(pack, filters) or not pack.active:
             continue
         if rates.buyback_rate is None:
             skips.append(_skip(pack, BUYBACK_DISABLED))
             continue
-        pack = _apply_overrides(pack, overrides)
+        pack = apply_values(pack, values)
         try:
             ev = evaluate_ev(
                 pack,
@@ -147,10 +153,12 @@ def rank(
         unrankable=tuple(unrankable),
         skipped=tuple(skips),
         generated_at=generated_at or datetime.now(UTC),
+        values=values,
     )
 
 
-def _matches_pack_filters(pack: SlabPack, filters: Filters) -> bool:
+def matches_pack_filters(pack: SlabPack, filters: Filters) -> bool:
+    """Whether `pack` passes the Category and price filters."""
     if filters.categories:
         wanted = {category_key(c) for c in filters.categories}
         if category_key(pack.category) not in wanted:
@@ -168,19 +176,6 @@ def _matches_metric_filters(ev: EVResult, risk: RiskResult, filters: Filters) ->
     return not (filters.exclude_high_variance and risk.high_variance)
 
 
-def _apply_overrides(pack: SlabPack, overrides: Overrides) -> SlabPack:
-    """`pack` with each Manual Override (by cert number, then card id) applied."""
-    cards = []
-    for card in pack.checklist:
-        value = overrides.lookup(card.card_id, card.cert_number)
-        if value is not None:
-            card = dataclasses.replace(
-                card, market_value=value, value_confidence=ValueConfidence.HIGH
-            )
-        cards.append(card)
-    return dataclasses.replace(pack, checklist=tuple(cards))
-
-
 def _ranked(pack: SlabPack, ev: EVResult, risk: RiskResult) -> RankedPack:
     return RankedPack(
         pack=pack,
@@ -189,11 +184,11 @@ def _ranked(pack: SlabPack, ev: EVResult, risk: RiskResult) -> RankedPack:
         p_1x=risk.p_at_least(1.0),
         p_2x=risk.p_at_least(2.0),
         p_10x=risk.p_at_least(10.0),
-        notes=_notes(ev, risk),
+        notes=_notes(pack, ev, risk),
     )
 
 
-def _notes(ev: EVResult, risk: RiskResult) -> tuple[str, ...]:
+def _notes(pack: SlabPack, ev: EVResult, risk: RiskResult) -> tuple[str, ...]:
     notes = []
     if risk.note is not None:
         notes.append(risk.note)
@@ -205,6 +200,10 @@ def _notes(ev: EVResult, risk: RiskResult) -> tuple[str, ...]:
             f"Hit Rates were more than {DEFAULT_WARN_DRIFT:.1%} off 100% "
             "and were rescaled."
         )
+    low = sum(c.value_confidence is ValueConfidence.LOW for c in pack.checklist)
+    if low:
+        noun = "card" if low == 1 else "cards"
+        notes.append(f"{low} {noun} valued at low confidence.")
     return tuple(notes)
 
 

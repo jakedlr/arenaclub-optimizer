@@ -398,6 +398,31 @@ def test_a_tag_team_name_matches_across_slash_and_ampersand(provider, api):
     assert api.paths[-1] == f"{API_PATH}/cards/201280"
 
 
+def test_an_exact_name_match_wins_over_a_word_subset_match(provider, api, cache):
+    dark = {"tcgPlayerId": "107004", "name": "Dark Charizard", "cardNumber": "4"}
+    plain = {"tcgPlayerId": "233294", "name": "Charizard", "cardNumber": "4/102"}
+    api.routes[CARDS] = (200, {"data": [dark, plain]}, {})
+
+    result = provider.quote(charizard())
+
+    assert isinstance(result, ValueQuote)
+    assert api.paths[-1] == CHARIZARD
+    assert cache.get_provider_id("pokeprice", "card:english|base set|4|charizard") == (
+        "233294"
+    )
+
+
+def test_a_word_subset_match_is_still_used_when_nothing_matches_exactly(provider, api):
+    secret = {
+        "tcgPlayerId": "233294",
+        "name": "Charizard (Secret)",
+        "cardNumber": "4/102",
+    }
+    api.routes[CARDS] = (200, {"data": [secret]}, {})
+    assert isinstance(provider.quote(charizard()), ValueQuote)
+    assert api.paths[-1] == CHARIZARD
+
+
 def test_without_a_name_a_single_number_match_is_enough(provider, api):
     result = provider.quote(identity(None, insert="Base Set", set_number="4"))
     assert isinstance(result, ValueQuote)
@@ -619,6 +644,51 @@ def test_with_seven_credits_left_a_cached_card_is_still_priced(cache, clock, api
 
 
 # --- errors ------------------------------------------------------------------
+
+
+def charged(api: Api, header: str) -> None:
+    """The priced lookup answers with `X-API-Calls-Consumed: header`."""
+    body = fixture("card_charizard_ebay.json")
+    api.routes[CHARIZARD] = (200, body, {"X-API-Calls-Consumed": header})
+
+
+def spend_records(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if "X-API-Calls-Consumed" in r.getMessage()]
+
+
+def test_a_server_charge_that_differs_from_the_local_spend_is_logged(
+    provider, api, budget, caplog
+):
+    charged(api, "50")
+    with caplog.at_level(logging.DEBUG, logger="arenaclub_optimizer.providers"):
+        provider.quote(charizard())
+
+    [record] = spend_records(caplog)
+    assert record.levelno == logging.DEBUG
+    assert record.name == "arenaclub_optimizer.providers.pokeprice"
+    message = record.getMessage()
+    assert "50" in message
+    assert "2" in message
+    assert "/cards/233294" in message
+    assert KEY not in caplog.text
+    # Only logged for now: the budget keeps the local spend.
+    assert budget.remaining("pokeprice") == 100 - 8
+
+
+@pytest.mark.parametrize("header", ["2", " 2 ", "lots", "-1", ""])
+def test_a_matching_or_unreadable_server_charge_is_not_logged(
+    provider, api, caplog, header
+):
+    charged(api, header)
+    with caplog.at_level(logging.DEBUG, logger="arenaclub_optimizer.providers"):
+        assert isinstance(provider.quote(charizard()), ValueQuote)
+    assert spend_records(caplog) == []
+
+
+def test_no_server_charge_header_logs_nothing(provider, caplog):
+    with caplog.at_level(logging.DEBUG, logger="arenaclub_optimizer.providers"):
+        provider.quote(charizard())
+    assert spend_records(caplog) == []
 
 
 def test_a_daily_429_exhausts_the_budget_and_uses_retry_after(provider, api, budget):
@@ -918,3 +988,51 @@ def test_no_fixture_holds_a_key_or_auth_header():
         assert "Bearer" not in text, path.name
         assert "Authorization" not in text, path.name
         assert KEY not in text, path.name
+
+
+# --- lasting or temporary --------------------------------------------------------
+
+
+@pytest.mark.parametrize("api_key", [None, "bad key"])
+def test_a_missing_or_malformed_key_is_a_lasting_unavailability(
+    cache, budget, api, api_key
+):
+    with make_provider(cache, budget, api, api_key=api_key) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert raised.value.lasting is True
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_key_is_a_lasting_unavailability(provider, api, status):
+    api.routes[SETS] = (status, fixture(f"error_{status}.json"), {})
+    for _ in range(2):
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+        assert raised.value.lasting is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        (429, "error_429_daily.json", {"Retry-After": "43200"}),
+        (429, "error_429_per_minute.json", {"Retry-After": "30"}),
+        (500, "error_404.json", {}),
+    ],
+)
+def test_limits_and_server_errors_are_temporary(provider, api, route):
+    status, body, headers = route
+    api.routes[SETS] = (status, fixture(body), headers)
+    with pytest.raises(ProviderUnavailable) as raised:
+        provider.quote(charizard())
+    assert raised.value.lasting is False
+
+
+def test_a_network_error_is_temporary(cache, budget):
+    def fail(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with make_provider(cache, budget, fail) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert raised.value.lasting is False
