@@ -1,0 +1,12 @@
+{
+  "data": [],
+  "metadata": {
+    "total": 0,
+    "count": 0,
+    "limit": 5,
+    "offset": 0,
+    "hasMore": false,
+    "language": "english",
+    "apiCallsConsumed": {"total": 1, "breakdown": {"sets": 1}}
+  }
+}

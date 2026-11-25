@@ -1,0 +1,8 @@
+{
+  "error": "Rate limit exceeded",
+  "message": "Daily credit limit reached",
+  "limitType": "daily",
+  "retryAfter": 43200,
+  "resetsAt": "2026-11-25T00:00:00.000Z",
+  "resolution": "Wait until the daily limit resets at 00:00 UTC, or upgrade your plan"
+}

@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "id": "507f1f77bcf86cd799439012",
+      "tcgPlayerId": "base-set",
+      "tcgPlayerNumericId": 604,
+      "name": "Base Set",
+      "series": "Base",
+      "releaseDate": "1999-01-09",
+      "cardCount": 102
+    },
+    {
+      "id": "507f1f77bcf86cd799439013",
+      "tcgPlayerId": "base-set-2",
+      "tcgPlayerNumericId": 605,
+      "name": "Base Set 2",
+      "series": "Base",
+      "releaseDate": "2000-02-24",
+      "cardCount": 130
+    }
+  ],
+  "metadata": {
+    "total": 2,
+    "count": 2,
+    "limit": 5,
+    "offset": 0,
+    "hasMore": false,
+    "language": "english",
+    "apiCallsConsumed": {"total": 1, "breakdown": {"sets": 1}}
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "tcgPlayerId": "233294",
+      "name": "Charizard",
+      "setName": "Base Set",
+      "cardNumber": "4",
+      "rarity": "Holo Rare",
+      "prices": {"market": 420, "listings": 156}
+    },
+    {
+      "tcgPlayerId": "233295",
+      "name": "Blastoise",
+      "setName": "Base Set",
+      "cardNumber": "2",
+      "rarity": "Holo Rare",
+      "prices": {"market": 180, "listings": 89}
+    }
+  ],
+  "metadata": {
+    "total": 2,
+    "count": 2,
+    "limit": 5,
+    "offset": 0,
+    "hasMore": false,
+    "language": "english",
+    "includes": {"priceHistory": false, "ebayData": false},
+    "apiCallsConsumed": {"total": 5, "breakdown": {"cards": 5}, "costPerCard": 1}
+  }
+}
