@@ -1,0 +1,28 @@
+# Example Manual Overrides for arenaclub-optimizer.
+#
+# Copy to $XDG_CONFIG_HOME/arenaclub-optimizer/overrides.toml
+# (usually ~/.config/arenaclub-optimizer/overrides.toml) and edit.
+#
+# A Manual Override sets the Market Value of a specific card and takes
+# precedence over every value source. Each entry is a table keyed by either:
+#   - the card's cert number (e.g. "12345678" or Arena Club's "8AC..." certs), or
+#   - the Arena Club card id, which starts with "card_".
+# When a card matches both, the cert-number entry wins.
+# Keys are matched exactly and are case-sensitive: "card_ABC" and "card_abc"
+# are different cards. Copy card ids and certs exactly as Arena Club shows them.
+#
+# Keys inside an entry:
+#   market_value  required, in dollars, 0 or more
+#   note          optional, free text (e.g. where the value came from)
+# Quote keys that contain anything other than letters, digits, "_" or "-".
+
+["12345678"]
+market_value = 250.00
+note = "PSA 10, average of last 5 eBay sales"
+
+["8AC0000001"]
+market_value = 35
+note = "Arena Club grade; raw Market Value"
+
+[card_00000000-0000-0000-0000-000000000000]
+market_value = 120.50

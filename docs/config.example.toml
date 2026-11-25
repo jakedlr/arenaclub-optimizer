@@ -1,0 +1,53 @@
+# Example config for arenaclub-optimizer.
+#
+# Copy to $XDG_CONFIG_HOME/arenaclub-optimizer/config.toml
+# (usually ~/.config/arenaclub-optimizer/config.toml) and edit.
+# Every key is optional; a missing key uses the default shown here.
+# Unknown keys and out-of-range values are errors.
+# Fractions are written as decimals: 0.25 means 25%.
+
+# k: assumed ratio of AC Value to Market Value (AC Value = k x Market Value).
+# Must be more than 0.
+k = 1.0
+
+# How you pay for a Rip: "wallet" (no fee), "ach" (0.8%, capped at $5)
+# or "card" (2.9% + $0.30).
+payment_method = "wallet"
+
+# Sales tax on a Rip, as a fraction from 0 up to (but not including) 1.
+tax_rate = 0.0
+
+# A Slab Pack is ranked only if at least this share of its Checklist's
+# Hit Rate probability has a Market Value. From 0 to 1.
+coverage_threshold = 0.95
+
+# The High-variance Note is added when P(profit) is below p_profit_threshold
+# or Top-heaviness is above top_heaviness_threshold. Each from 0 to 1.
+p_profit_threshold = 0.25
+top_heaviness_threshold = 0.5
+
+[filters]
+# Default filters for the Top Results; command-line options override them.
+# Categories to include, e.g. ["Pokemon", "Football"]. Empty means all.
+categories = []
+# List-price range in dollars. Leave out for no limit.
+# price_min = 50
+# price_max = 150
+# Minimum EV % as a fraction (0.05 = 5%; may be negative). Leave out for none.
+# min_ev_pct = 0.0
+# Minimum P(profit), from 0 to 1. Leave out for none.
+# min_p_profit = 0.2
+# Drop Slab Packs that carry a High-variance Note.
+exclude_high_variance = false
+# How many Top Results to show (at least 1).
+top = 10
+
+[watch]
+# Watch Mode settings (Watch Mode itself arrives in a later sprint).
+# Minutes between runs; the minimum is 5.
+interval_minutes = 10
+# ntfy server that Alerts are sent to.
+ntfy_server = "https://ntfy.sh"
+# The Topic you subscribe to. Leave out to have one generated on first run.
+# Use 1-64 letters, digits, "_" or "-". Anyone who knows it can read your Alerts.
+# topic = "replace-with-a-long-random-topic"
