@@ -29,6 +29,7 @@ MIN_INTERVAL_MINUTES = 5
 CARD_ID_PREFIX = "card_"
 # ntfy topics: letters, digits, `_` and `-`, at most 64 characters.
 _TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+TOPIC_RULE = "must be 1-64 letters, digits, '_' or '-' characters"
 
 
 def is_valid_topic(topic: str) -> bool:
@@ -55,7 +56,7 @@ class Filters:
 
 @dataclass(frozen=True)
 class Watch:
-    """Watch Mode settings. Values only; Watch Mode itself is Sprint 4."""
+    """Watch Mode settings. `topic` None means the generated one (see notify)."""
 
     interval_minutes: float = 10.0
     ntfy_server: str = "https://ntfy.sh"
@@ -303,9 +304,7 @@ def _watch(reader: _Reader, data: dict[str, Any]) -> Watch:
 
     topic = reader.optional_str(data, "topic", at=at)
     if topic is not None and not is_valid_topic(topic):
-        raise reader.error(
-            f"{at}topic", "must be 1-64 letters, digits, '_' or '-' characters"
-        )
+        raise reader.error(f"{at}topic", TOPIC_RULE)
     return Watch(interval_minutes=interval, ntfy_server=server, topic=topic)
 
 

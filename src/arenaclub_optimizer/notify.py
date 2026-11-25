@@ -29,7 +29,7 @@ from typing import Protocol, Self
 import httpx
 
 from arenaclub_optimizer.arena_client import USER_AGENT
-from arenaclub_optimizer.config import Config, ConfigError, is_valid_topic
+from arenaclub_optimizer.config import TOPIC_RULE, Config, ConfigError, is_valid_topic
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +95,7 @@ def get_or_create_topic(config: Config, state_dir: Path) -> str:
     configured = config.watch.topic
     if configured is not None:
         if not is_valid_topic(configured):
-            raise ConfigError(
-                "watch.topic must be 1-64 letters, digits, '_' or '-' "
-                f"characters, got {configured!r}"
-            )
+            raise ConfigError(f"watch.topic {TOPIC_RULE}, got {configured!r}")
         return configured
 
     path = state_dir / TOPIC_FILENAME
