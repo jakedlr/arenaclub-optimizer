@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from rich import box
+from rich.cells import cell_len
 from rich.table import Table
 from rich.text import Text
 
@@ -90,11 +91,15 @@ def results_table(report: RankingReport, k: float, *, wide: bool = False) -> Tab
     # a word longer than the cap is split.
     longest = max((len(word) for name in names for word in name.split()), default=0)
     table.add_column("Slab Pack", overflow="fold", min_width=min(longest, 16))
-    for column in columns:
-        table.add_column(column.header, justify="right", no_wrap=True)
-    for name, result in zip(names, report.results, strict=True):
-        cells = [name, *(c.cell(result) for c in columns)]
-        table.add_row(*(Text(cell) for cell in cells))
+    rows = [[c.cell(result) for c in columns] for result in report.results]
+    for i, column in enumerate(columns):
+        # rich measures a no-wrap column by its longest word, which would let
+        # a narrow console crop it; an explicit width keeps every figure whole.
+        lines = [*column.header.split("\n"), *(row[i] for row in rows)]
+        width = max(cell_len(line) for line in lines)
+        table.add_column(column.header, justify="right", no_wrap=True, min_width=width)
+    for name, row in zip(names, rows, strict=True):
+        table.add_row(*(Text(cell) for cell in [name, *row]))
     return table
 
 
