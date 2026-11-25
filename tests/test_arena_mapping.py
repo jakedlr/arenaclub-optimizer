@@ -13,11 +13,12 @@ from arenaclub_optimizer.arena_mapping import (
     ArenaMappingError,
     PackRates,
     build_label,
+    card_identity,
     is_card_product,
     map_slab_pack,
     pack_rates,
 )
-from arenaclub_optimizer.model import SlabPack, TierType
+from arenaclub_optimizer.model import CardIdentity, Language, SlabPack, TierType
 
 SNAPSHOT = Path(__file__).parent / "fixtures" / "arena" / "snapshot"
 
@@ -454,3 +455,94 @@ def test_other_product_types_are_not_card_products(product_type):
 
 def test_price_level_without_a_category_is_not_a_card_product():
     assert is_card_product({}) is False
+
+
+# --- card identity -----------------------------------------------------------
+
+UMBREON_H30 = "card_80747173-c08f-4080-bdf6-623fedc5cef6"
+
+
+def test_map_slab_pack_fills_in_each_cards_identity(pack_json, cards_json):
+    pack = map_slab_pack(pack_json, cards_json)
+
+    by_id = {c.card_id: c for c in pack.checklist}
+    assert by_id[UMBREON_H30].identity == CardIdentity(
+        year=2003,
+        set_name="2003 Pokemon E-CARD",
+        insert="Skyridge",
+        subset_name="Skyridge",
+        parallel_name="Base",
+        card_name="Umbreon",
+        set_number="H30",
+        language=Language.ENGLISH,
+        grader="psa",
+        grade="10",
+        cert_number="28570043",
+    )
+    for card in pack.checklist:
+        assert card.identity == card_identity(cards_json[card.card_id])
+
+
+def test_identity_cert_and_grade_agree_with_the_card(pack_json, cards_json):
+    for card in map_slab_pack(pack_json, cards_json).checklist:
+        assert card.identity.cert_number == card.cert_number
+        assert card.identity.grade == card.grade
+        assert card.identity.grader == card.grader
+
+
+def test_snapshot_japanese_cards_are_the_ones_with_jpn_in_set_name(cards_json):
+    japanese = {
+        card_id
+        for card_id, card in cards_json.items()
+        if card_identity(card).language is Language.JAPANESE
+    }
+    with_jpn = {
+        card_id
+        for card_id, card in cards_json.items()
+        if "JPN" in card["setName"].split()
+    }
+    assert len(japanese) == 8
+    assert japanese == with_jpn
+
+
+@pytest.mark.parametrize(
+    "set_name",
+    ["2001 Pokemon Neo 4 JPN", "2019 Pokemon S&M JPN ", "2023 pokemon sv jpn"],
+)
+def test_jpn_in_set_name_means_japanese(set_name):
+    identity = card_identity(card("card_a", setName=set_name))
+    assert identity.language is Language.JAPANESE
+    assert identity.set_name == set_name.strip()
+
+
+@pytest.mark.parametrize("set_name", ["2021 Pokemon SWSH", "2021 Pokemon JPNX", None])
+def test_other_set_names_mean_english(set_name):
+    identity = card_identity(card("card_a", setName=set_name))
+    assert identity.language is Language.ENGLISH
+
+
+def test_identity_without_insert_keeps_the_subset(cards_json):
+    neo = card("card_a", insert=None, subsetName="Base", setName="2000 Pokemon Neo")
+    identity = card_identity(neo)
+    assert identity.insert is None
+    assert identity.subset_name == "Base"
+
+
+def test_identity_keeps_the_arena_club_grader_and_half_grades():
+    darkrai = card("card_a", gradingCompany="arena_club", overall=9.5)
+    identity = card_identity(darkrai)
+    assert identity.grader == ARENA_CLUB_GRADER
+    assert identity.grade == "9.5"
+
+
+def test_identity_reads_a_whole_float_grade_as_an_integer():
+    assert card_identity(card("card_a", overall=10.0)).grade == "10"
+
+
+def test_identity_ignores_a_year_it_cannot_read():
+    assert card_identity(card("card_a", year="n/a")).year is None
+    assert card_identity(card("card_a", year="2021")).year == 2021
+
+
+def test_identity_of_a_sparse_card_is_mostly_empty():
+    assert card_identity({"id": "card_a"}) == CardIdentity()
