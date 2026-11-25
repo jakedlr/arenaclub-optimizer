@@ -1,14 +1,16 @@
 import json
 import logging
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fake_values import NO_VALUES
 
 from arenaclub_optimizer.alerts import (
     DEFAULT_EV_STEP_PCT,
+    DEFAULT_STALE_AFTER,
     MAX_MESSAGE_BYTES,
+    MAX_TITLE_BYTES,
     STATE_FILENAME,
     Alert,
     AlertedPack,
@@ -166,8 +168,9 @@ def test_a_pack_still_in_the_results_is_not_alerted_again():
     cycles, state = run(report(ranked("gp", 0.042)), report(ranked("gp", 0.042)))
 
     assert [len(c) for c in cycles] == [1, 0]
-    # The last alerted value and time stay those of the first Alert.
-    assert state.packs["gp"] == AlertedPack(0.042, T0)
+    # The last alerted value and time stay those of the first Alert; only
+    # last_seen_at moves.
+    assert state.packs["gp"] == AlertedPack(0.042, T0, last_seen_at=T1)
 
 
 def test_an_empty_report_sends_nothing():
@@ -204,7 +207,7 @@ def test_a_rise_below_the_step_is_not_improved():
     cycles, state = run(report(ranked("gp", 0.10)), report(ranked("gp", 0.149)))
 
     assert cycles[1] == []
-    assert state.packs["gp"] == AlertedPack(0.10, T0)
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=T1)
 
 
 def test_small_rises_add_up_against_the_last_alerted_value():
@@ -234,7 +237,7 @@ def test_a_dip_then_recovery_to_the_same_level_does_not_re_alert():
     )
 
     assert [len(c) for c in cycles] == [1, 0, 0, 0]
-    assert state.packs["gp"] == AlertedPack(0.10, T0)
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=T3)
 
 
 def test_a_dip_then_rise_past_the_last_alerted_value_plus_step_alerts():
@@ -284,7 +287,95 @@ def test_a_pack_skipped_this_cycle_keeps_its_entry():
     )
 
     assert [len(c) for c in cycles] == [1, 0, 0]
-    assert state.packs["gp"] == AlertedPack(0.10, T0)
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=T2)
+
+
+def test_an_alerted_pack_defaults_last_seen_at_to_alerted_at():
+    assert AlertedPack(0.1, T0).last_seen_at == T0
+
+
+def skipped_report(pack_id: str = "gp") -> RankingReport:
+    return report(skipped=(SkippedPack(pack_id, "Gold Pokémon", "Hit Rates rejected"),))
+
+
+def test_a_skipped_pack_does_not_refresh_last_seen_at():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+
+    _, state = detect(state, skipped_report(), now=T0 + timedelta(hours=1))
+
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=T0)
+
+
+def test_a_skipped_pack_is_kept_up_to_stale_after():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+
+    _, state = detect(state, skipped_report(), now=T0 + DEFAULT_STALE_AFTER)
+
+    assert "gp" in state.packs
+
+
+def test_a_pack_skipped_for_longer_than_stale_after_is_dropped():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+    later = T0 + DEFAULT_STALE_AFTER + timedelta(minutes=1)
+
+    alerts, state = detect(state, skipped_report(), now=later)
+
+    assert alerts == []
+    assert state.packs == {}
+
+
+def test_a_long_skipped_pack_that_returns_is_entered_again():
+    # E.g. its Hit Rates were rejected for days, then fixed. Its return at
+    # 0.12 is below the old 0.10 + step, but it counts as Entered.
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+    hour = timedelta(hours=1)
+    for n in range(1, 30):
+        _, state = detect(state, skipped_report(), now=T0 + n * hour)
+
+    alerts, state = detect(state, report(ranked("gp", 0.12)), now=T0 + 30 * hour)
+
+    assert [a.kind for a in alerts] == [AlertKind.ENTERED]
+
+
+def test_a_pack_seen_in_the_results_restarts_the_stale_clock():
+    later = T0 + timedelta(hours=20)
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+    _, state = detect(state, report(ranked("gp", 0.10)), now=later)
+
+    _, state = detect(state, skipped_report(), now=later + timedelta(hours=20))
+
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=later)
+
+
+def test_stale_after_is_configurable():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+
+    _, state = detect(
+        state,
+        skipped_report(),
+        now=T0 + timedelta(hours=2),
+        stale_after=timedelta(hours=1),
+    )
+
+    assert state.packs == {}
+
+
+@pytest.mark.parametrize("stale_after", [timedelta(0), timedelta(hours=-1)])
+def test_a_stale_after_that_is_not_positive_is_rejected(stale_after):
+    with pytest.raises(ValueError, match="stale_after"):
+        detect(AlertState(), report(), now=T0, stale_after=stale_after)
+
+
+def test_detect_rejects_a_naive_now():
+    with pytest.raises(ValueError, match="now"):
+        detect(AlertState(), report(), now=datetime(2026, 11, 26, 10, 0))
+
+
+def test_an_aware_now_in_another_zone_is_accepted():
+    zone = timezone(timedelta(hours=-8))
+    alerts, _ = detect(AlertState(), report(ranked("gp")), now=T0.astimezone(zone))
+
+    assert len(alerts) == 1
 
 
 def test_detect_keeps_the_health_status():
@@ -487,7 +578,10 @@ def test_from_fetch_is_degraded_when_more_than_half_were_skipped(skipped, total,
 
 def sample_state() -> AlertState:
     return AlertState(
-        packs={"gp": AlertedPack(0.042, T0), "gf": AlertedPack(-0.01, T1)},
+        packs={
+            "gp": AlertedPack(0.042, T0, last_seen_at=T2),
+            "gf": AlertedPack(-0.01, T1),
+        },
         health=HealthKind.DEGRADED,
     )
 
@@ -507,7 +601,21 @@ def test_state_is_stored_as_json_in_alerts_json(tmp_path):
     assert data["packs"]["gp"] == {
         "buyback_ev_pct": 0.042,
         "alerted_at": T0.isoformat(),
+        "last_seen_at": T2.isoformat(),
     }
+    assert data["version"] == 1
+
+
+def test_a_file_without_last_seen_at_defaults_it_to_alerted_at(tmp_path):
+    (tmp_path / STATE_FILENAME).write_text(
+        '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1,'
+        ' "alerted_at": "2026-11-26T10:00:00+00:00"}}}',
+        encoding="utf-8",
+    )
+
+    state = load_state(tmp_path)
+
+    assert state.packs["gp"] == AlertedPack(0.1, T0, last_seen_at=T0)
 
 
 def test_the_default_directory_is_the_state_dir():
@@ -523,6 +631,14 @@ def test_saving_creates_the_directory(tmp_path):
     save_state(sample_state(), directory)
 
     assert load_state(directory) == sample_state()
+
+
+def test_the_state_directory_is_private(tmp_path):
+    directory = tmp_path / "state"
+
+    save_state(sample_state(), directory)
+
+    assert directory.stat().st_mode & 0o777 == 0o700
 
 
 def test_a_missing_file_is_empty_state_without_a_warning(tmp_path, caplog):
@@ -549,6 +665,13 @@ def test_a_missing_file_is_empty_state_without_a_warning(tmp_path, caplog):
         '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1,'
         ' "alerted_at": "yesterday"}}}',
         '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1}}}',
+        '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1,'
+        ' "alerted_at": "2026-11-26T10:00:00"}}}',
+        '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1,'
+        ' "alerted_at": "2026-11-26T10:00:00+00:00", "last_seen_at": 5}}}',
+        '{"version": 1, "health": "ok", "packs": {"gp": {"buyback_ev_pct": 0.1,'
+        ' "alerted_at": "2026-11-26T10:00:00+00:00",'
+        ' "last_seen_at": "2026-11-26T10:00:00"}}}',
         "",
     ],
 )
@@ -559,6 +682,46 @@ def test_a_corrupt_file_is_logged_and_treated_as_empty(tmp_path, caplog, text):
         assert load_state(tmp_path) == AlertState()
 
     assert any(STATE_FILENAME in r.getMessage() for r in caplog.records)
+
+
+def aside(directory) -> list:
+    return sorted(directory.glob(f"{STATE_FILENAME}.corrupt-*"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["{not json", '{"version": 99, "health": "ok", "packs": {}}'],
+    ids=["corrupt", "unknown-version"],
+)
+def test_a_corrupt_file_is_renamed_aside(tmp_path, caplog, text):
+    (tmp_path / STATE_FILENAME).write_text(text, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="arenaclub_optimizer.alerts"):
+        load_state(tmp_path)
+
+    [kept] = aside(tmp_path)
+    assert kept.read_text(encoding="utf-8") == text
+    assert not (tmp_path / STATE_FILENAME).exists()
+    # The name ends in a UTC timestamp, and the log says where the file went.
+    stamp = kept.name.removeprefix(f"{STATE_FILENAME}.corrupt-")
+    datetime.strptime(stamp, "%Y%m%dT%H%M%SZ")
+    assert any(kept.name in r.getMessage() for r in caplog.records)
+
+
+def test_a_renamed_aside_file_is_not_read_again(tmp_path):
+    (tmp_path / STATE_FILENAME).write_text("{not json", encoding="utf-8")
+    load_state(tmp_path)
+
+    save_state(sample_state(), tmp_path)
+
+    assert load_state(tmp_path) == sample_state()
+    assert len(aside(tmp_path)) == 1
+
+
+def test_a_missing_file_is_not_renamed(tmp_path):
+    load_state(tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_file_that_is_not_utf8_is_treated_as_empty(tmp_path, caplog):
@@ -585,10 +748,10 @@ def test_a_failed_write_keeps_the_previous_file(tmp_path, monkeypatch):
         raise OSError("disk full")
 
     # The new state is fully written to a temp file, then the swap fails.
-    monkeypatch.setattr(os, "replace", fail)
-    with pytest.raises(OSError, match="disk full"):
-        save_state(AlertState(), tmp_path)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(os, "replace", fail)
+        with pytest.raises(OSError, match="disk full"):
+            save_state(AlertState(), tmp_path)
 
     assert (tmp_path / STATE_FILENAME).read_bytes() == before
     assert [p.name for p in tmp_path.iterdir()] == [STATE_FILENAME]
@@ -608,4 +771,28 @@ def test_every_alert_is_plain_text_under_the_limit():
 
     assert isinstance(alert, Alert)
     assert len(alert.message.encode("utf-8")) <= MAX_MESSAGE_BYTES
+    assert len(alert.title.encode("utf-8")) <= MAX_TITLE_BYTES
+    assert alert.title.endswith("…")
     assert isinstance(alert.tags, tuple)
+
+
+def test_the_title_cap_is_about_250_bytes():
+    assert 200 <= MAX_TITLE_BYTES <= 256
+
+
+def test_a_short_title_is_not_cut():
+    [alert], _ = detect(AlertState(), report(ranked("gp")), now=T0)
+
+    assert alert.title == "New Top Result: Gold Pokémon"
+
+
+def test_an_improved_title_is_capped_too():
+    long_name = "Pokémon " * 1000
+    _, state = detect(
+        AlertState(), report(ranked("gp", 0.1, category=long_name)), now=T0
+    )
+
+    [alert], _ = detect(state, report(ranked("gp", 0.2, category=long_name)), now=T1)
+
+    assert alert.kind is AlertKind.IMPROVED
+    assert len(alert.title.encode("utf-8")) <= MAX_TITLE_BYTES
