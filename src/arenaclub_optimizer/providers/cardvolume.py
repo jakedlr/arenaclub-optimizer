@@ -14,6 +14,7 @@ import re
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -376,20 +377,14 @@ def _unexpected_status(status: int, what: str) -> ProviderUnavailable:
 # --- the index file ----------------------------------------------------------
 
 
+@dataclass(frozen=True)
 class _CachedIndex:
     """`cards.json` as downloaded, with when and its validators."""
 
-    def __init__(
-        self,
-        fetched_at: datetime,
-        etag: str | None,
-        last_modified: str | None,
-        body: Json,
-    ) -> None:
-        self.fetched_at = fetched_at
-        self.etag = etag
-        self.last_modified = last_modified
-        self.body = body
+    fetched_at: datetime
+    etag: str | None
+    last_modified: str | None
+    body: Json
 
     @property
     def cards(self) -> list[Any]:

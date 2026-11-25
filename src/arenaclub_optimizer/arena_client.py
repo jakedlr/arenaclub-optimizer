@@ -23,6 +23,7 @@ from typing import Any, Self
 import httpx
 
 from arenaclub_optimizer.config import cache_dir
+from arenaclub_optimizer.spacing import RequestSpacer
 
 BASE_URL = "https://api.arenaclub.com"
 REPO_URL = "https://github.com/jakedlr/arenaclub-optimizer"
@@ -85,11 +86,8 @@ class ArenaClient:
             timeout=timeout,
             transport=transport,
         )
-        self._min_interval = min_interval
         self._cache_dir = cache_dir if cache_dir is not None else default_cache_dir()
-        self._clock = clock
-        self._sleep = sleep
-        self._last_request_at: float | None = None
+        self._spacer = RequestSpacer(min_interval, clock=clock, sleep=sleep)
 
     def __enter__(self) -> Self:
         return self
@@ -133,7 +131,7 @@ class ArenaClient:
         return card
 
     def _get_json(self, path: str) -> dict[str, Any]:
-        self._wait_for_slot()
+        self._spacer.wait()
         try:
             response = self._http.get(path)
         except httpx.TimeoutException as exc:
@@ -155,14 +153,6 @@ class ArenaClient:
         if not isinstance(body, dict):
             raise ArenaApiError(f"GET {path}: response is not a JSON object", status)
         return body
-
-    def _wait_for_slot(self) -> None:
-        """Sleep until ``min_interval`` has passed since the previous request."""
-        if self._last_request_at is not None:
-            remaining = self._min_interval - (self._clock() - self._last_request_at)
-            if remaining > 0:
-                self._sleep(remaining)
-        self._last_request_at = self._clock()
 
 
 def _checked_id(value: str) -> str:

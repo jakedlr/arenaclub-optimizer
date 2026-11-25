@@ -141,7 +141,7 @@ Sources (cited by tag):
 ### Attribution, rate limits, caching
 - **Attribution is required:** "Please cite CardVolume with the card's URL whenever you use a figure." Quote the version, grade, figure and as-of date. Each card response includes a ready-made `cite_as` string, e.g. "Umbreon VMAX 215/203 (Evolving Skies). CardVolume, https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/ (accessed 2026-11-24)." [CV-DEV; CV-OAS; CV-API]. Store `url` and `as_of` with each value and show them in the UI.
 - **Rate limits are not published. UNVERIFIED.** No rate-limit headers were seen [CV-API].
-- **Caching rules are not published.** Responses carry `ETag` and `Last-Modified`, so conditional GET is likely possible (**UNVERIFIED**, 304 not tested). Data changes about daily (`as_of`, per-card `updated`) [CV-API].
+- **Caching rules are not published.** Responses carry `ETag` and `Last-Modified`, and a conditional GET of `cards.json` with `If-None-Match`/`If-Modified-Since` returns **304** (verified 2026-11-25 while capturing the #27 fixtures; the 200 sends a weak `W/"…"` ETag, the 304 a strong one). Data changes about daily (`as_of`, per-card `updated`) [CV-API].
 - Terms: you may quote short excerpts with attribution. "Scrape the site at scale" is banned [CV-TOS]. The JSON API is the sanctioned route.
 - `robots.txt` disallows `/api/cards/` but not `/api/v1/` (https://cardvolume.com/robots.txt).
 - Suggested approach: refresh `cards.json` at most daily and fetch a card JSON only when it matches.
