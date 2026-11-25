@@ -142,6 +142,30 @@ def test_fixture_card_identity(pack_json, cards_json):
     assert umbreon.label == "2003 Pokemon E-CARD Skyridge Umbreon #H30 PSA 10"
 
 
+def test_fixture_card_keeps_its_cert_number(pack_json, cards_json):
+    pack = map_slab_pack(pack_json, cards_json)
+
+    umbreon = pack.checklist[0]
+    assert umbreon.card_id == "card_80747173-c08f-4080-bdf6-623fedc5cef6"
+    assert umbreon.cert_number == "28570043"
+
+
+def test_card_without_a_cert_number_has_none():
+    cards = {"card_a": card("card_a"), "card_b": card("card_b", cardCertNumber="")}
+
+    pack = map_slab_pack(small_pack(), cards)
+
+    assert [c.cert_number for c in pack.checklist] == [None, None]
+
+
+def test_numeric_cert_number_becomes_text():
+    cards = {"card_a": card("card_a", cardCertNumber=12345678), "card_b": card("b")}
+
+    pack = map_slab_pack(small_pack(), cards)
+
+    assert pack.checklist[0].cert_number == "12345678"
+
+
 def test_fixture_cards_without_an_insert_use_the_subset_and_parallel(
     pack_json, cards_json
 ):

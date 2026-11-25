@@ -39,6 +39,11 @@ def cards_with_rates(*rates: float) -> tuple[ChecklistCard, ...]:
 # --- model -----------------------------------------------------------------
 
 
+def test_cert_number_defaults_to_none():
+    assert make_card("a", 1.0).cert_number is None
+    assert make_card("a", 1.0, cert_number="123").cert_number == "123"
+
+
 def test_tier_type_values_match_arena_club_tier_type():
     assert TierType("grail") is TierType.GRAIL
     assert TierType("chase") is TierType.CHASE
