@@ -7,7 +7,7 @@
 # Fractions are written as decimals: 0.25 means 25%.
 
 # k: assumed ratio of AC Value to Market Value (AC Value = k x Market Value).
-# Must be 0 or more.
+# Must be more than 0.
 k = 1.0
 
 # How you pay for a Rip: "wallet" (no fee), "ach" (0.8%, capped at $5)

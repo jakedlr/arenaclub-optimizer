@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
 from arenaclub_optimizer.cost import PaymentMethod
 
@@ -122,7 +123,7 @@ def load_config(path: Path | None = None, *, directory: Path | None = None) -> C
 
     defaults = Config()
     return Config(
-        k=reader.number(data, "k", defaults.k, low=0.0),
+        k=reader.number(data, "k", defaults.k, low=0.0, low_open=True),
         payment_method=reader.payment_method(data, "payment_method"),
         tax_rate=reader.number(
             data, "tax_rate", defaults.tax_rate, low=0.0, high=1.0, high_open=True
@@ -158,6 +159,8 @@ def load_overrides(
     by_card_id: dict[str, Override] = {}
     for key in data:
         entry = reader.table(data, key)
+        if key == CARD_ID_PREFIX:
+            raise reader.error(key, "has the card_ prefix but no card id after it")
         prefix = f"{key}."
         reader.reject_unknown(entry, Override, prefix)
         override = Override(
@@ -207,8 +210,11 @@ def _watch(reader: _Reader, data: dict[str, Any]) -> Watch:
     )
 
     server = reader.string(data, "ntfy_server", defaults.ntfy_server, at=at)
-    if not server.startswith(("https://", "http://")):
-        raise reader.error(f"{at}ntfy_server", "must start with https:// or http://")
+    url = urlsplit(server)
+    if url.scheme not in ("https", "http") or not url.netloc:
+        raise reader.error(
+            f"{at}ntfy_server", f"must be an http(s) URL with a host, got {server!r}"
+        )
 
     topic = reader.optional_str(data, "topic", at=at)
     if topic is not None and not _TOPIC_RE.fullmatch(topic):
@@ -266,10 +272,17 @@ class _Reader:
         low: float | None = None,
         high: float | None = None,
         high_open: bool = False,
+        low_open: bool = False,
         at: str = "",
     ) -> float:
         value = self.optional_number(
-            data, key, low=low, high=high, high_open=high_open, at=at
+            data,
+            key,
+            low=low,
+            high=high,
+            high_open=high_open,
+            low_open=low_open,
+            at=at,
         )
         return default if value is None else value
 
@@ -289,6 +302,7 @@ class _Reader:
         low: float | None = None,
         high: float | None = None,
         high_open: bool = False,
+        low_open: bool = False,
         at: str = "",
     ) -> float | None:
         if key not in data:
@@ -297,11 +311,15 @@ class _Reader:
         name = f"{at}{key}"
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise self.error(name, f"must be a number, got {value!r}")
-        value = float(value)
+        try:
+            value = float(value)
+        except OverflowError:
+            raise self.error(name, "is too large to be a number") from None
         if not math.isfinite(value):
             raise self.error(name, f"must be finite, got {value}")
-        if low is not None and value < low:
-            raise self.error(name, f"must be at least {low}, got {value}")
+        if low is not None and (value <= low if low_open else value < low):
+            bound = "more than" if low_open else "at least"
+            raise self.error(name, f"must be {bound} {low}, got {value}")
         if high is not None and (value >= high if high_open else value > high):
             bound = "below" if high_open else "at most"
             raise self.error(name, f"must be {bound} {high}, got {value}")

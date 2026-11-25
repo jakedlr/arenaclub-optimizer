@@ -8,6 +8,8 @@
 #   - the card's cert number (e.g. "12345678" or Arena Club's "8AC..." certs), or
 #   - the Arena Club card id, which starts with "card_".
 # When a card matches both, the cert-number entry wins.
+# Keys are matched exactly and are case-sensitive: "card_ABC" and "card_abc"
+# are different cards. Copy card ids and certs exactly as Arena Club shows them.
 #
 # Keys inside an entry:
 #   market_value  required, in dollars, 0 or more
