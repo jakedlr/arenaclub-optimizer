@@ -3,7 +3,9 @@
 from typing import Any
 
 from rich.table import Table
+from rich.text import Text
 
+from arenaclub_optimizer.config import Config
 from arenaclub_optimizer.ranking import (
     RankedPack,
     RankingReport,
@@ -43,7 +45,8 @@ def summary_line(report: RankingReport) -> str:
 
 def results_table(report: RankingReport, k: float) -> Table:
     """The Top Results as a table, best first. `k` goes in the caption, since
-    Buyback EV rests on it."""
+    Buyback EV rests on it. Every cell is a `Text`, so Arena Club data such as
+    "Football [Japanese]" is never parsed as rich markup."""
     table = Table(
         title="Top Results",
         caption=f"Buyback EV is an estimate: AC Value = k × Market Value, k = {k:g}.",
@@ -56,12 +59,13 @@ def results_table(report: RankingReport, k: float) -> Table:
     return table
 
 
-def report_json(report: RankingReport) -> dict[str, Any]:
-    """The report as a JSON-ready dict. Fractions stay fractions (0.05 = 5%)
-    and amounts are in dollars."""
+def report_json(report: RankingReport, config: Config) -> dict[str, Any]:
+    """The report as a JSON-ready dict, with the `config` it was ranked under.
+    Fractions stay fractions (0.05 = 5%) and amounts are in dollars."""
     return {
         "version": JSON_VERSION,
         "generated_at": report.generated_at.isoformat(),
+        "settings": _settings_json(config),
         "summary": {
             "ranked": len(report.results),
             "unrankable": len(report.unrankable),
@@ -76,10 +80,10 @@ def report_json(report: RankingReport) -> dict[str, Any]:
     }
 
 
-def _row(result: RankedPack) -> list[str]:
+def _row(result: RankedPack) -> list[Text]:
     ev, risk = result.ev, result.risk
     slab_safe = _DASH if ev.slab_safe_ev is None else _signed_money(ev.slab_safe_ev)
-    return [
+    cells = [
         pack_name(result.pack),
         f"${result.pack.price:,.2f}",
         f"{ev.buyback_ev_pct:+.1%}",
@@ -92,6 +96,7 @@ def _row(result: RankedPack) -> list[str]:
         f"{ev.value_coverage:.0%}",
         "\n".join(result.notes),
     ]
+    return [Text(cell) for cell in cells]
 
 
 def _signed_money(amount: float) -> str:
@@ -104,6 +109,27 @@ def _probability(p: float) -> str:
     if 0 < p < 0.001:
         return "<0.1%"
     return f"{p:.1%}"
+
+
+def _settings_json(config: Config) -> dict[str, Any]:
+    filters = config.filters
+    return {
+        "k": config.k,
+        "payment_method": config.payment_method.value,
+        "tax_rate": config.tax_rate,
+        "coverage_threshold": config.coverage_threshold,
+        "p_profit_threshold": config.p_profit_threshold,
+        "top_heaviness_threshold": config.top_heaviness_threshold,
+        "filters": {
+            "categories": list(filters.categories),
+            "price_min": filters.price_min,
+            "price_max": filters.price_max,
+            "min_ev_pct": filters.min_ev_pct,
+            "min_p_profit": filters.min_p_profit,
+            "exclude_high_variance": filters.exclude_high_variance,
+            "top": filters.top,
+        },
+    }
 
 
 def _result_json(position: int, result: RankedPack) -> dict[str, Any]:

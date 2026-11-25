@@ -6,6 +6,7 @@ from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.text import Text
 
 from arenaclub_optimizer.arena_client import (
     ArenaApiError,
@@ -157,7 +158,8 @@ def rank(
     report = rank_packs(fetched.packs, config, overrides, skipped=fetched.skipped)
 
     if json_output:
-        typer.echo(json.dumps(report_json(report), indent=2, allow_nan=False))
+        document = report_json(report, config)
+        typer.echo(json.dumps(document, indent=2, allow_nan=False))
         typer.echo(summary_line(report), err=True)
         return
 
@@ -166,11 +168,11 @@ def rank(
         console.print(results_table(report, config.k))
     else:
         console.print("No Slab Packs met the criteria.")
+    # Text, not str: pack names and reasons come from Arena Club and may hold
+    # brackets that rich would otherwise parse as markup.
     for skipped in report.skipped:
-        console.print(
-            f"Skipped {skipped.name}: {skipped.reason}", markup=False, highlight=False
-        )
-    console.print(summary_line(report), markup=False, highlight=False)
+        console.print(Text(f"Skipped {skipped.name}: {skipped.reason}"))
+    console.print(Text(summary_line(report)))
 
 
 @app.command()
