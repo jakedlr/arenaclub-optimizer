@@ -14,6 +14,7 @@ from arenaclub_optimizer.config import (
     Overrides,
     Watch,
     config_dir,
+    is_valid_topic,
     load_config,
     load_overrides,
     override_config,
@@ -60,18 +61,27 @@ def test_state_dir_uses_xdg_state_home(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "env",
-    [{}, {"XDG_STATE_HOME": ""}, {"XDG_STATE_HOME": "relative/state"}],
+    "env", [{}, {"XDG_STATE_HOME": ""}, {"XDG_STATE_HOME": "relative/state"}]
 )
 def test_state_dir_falls_back_to_home_local_state(tmp_path, env):
-    # Per the XDG spec, an unset, empty or relative XDG_STATE_HOME is ignored.
-    expected = tmp_path / ".local" / "state" / APP_DIR_NAME
-    assert state_dir(env, home=tmp_path) == expected
+    assert state_dir(env, home=tmp_path) == tmp_path / ".local" / "state" / APP_DIR_NAME
 
 
 def test_state_dir_reads_process_environment_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert state_dir() == tmp_path / APP_DIR_NAME
+
+
+@pytest.mark.parametrize("topic", ["a", "Abc_123-xyz", "x" * 64])
+def test_valid_topics(topic):
+    assert is_valid_topic(topic)
+
+
+@pytest.mark.parametrize(
+    "topic", ["", "x" * 65, "has space", "slash/topic", "é", "a\n"]
+)
+def test_invalid_topics(topic):
+    assert not is_valid_topic(topic)
 
 
 def test_tests_never_see_the_real_state_home():
