@@ -1,6 +1,6 @@
 """Fake value providers and card builders for the value pipeline tests."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, date, datetime
 
 from arenaclub_optimizer.model import (
@@ -11,10 +11,13 @@ from arenaclub_optimizer.model import (
 )
 from arenaclub_optimizer.values import (
     CreditBudget,
+    NeedsReview,
     NotFound,
     ProviderUnavailable,
     Unmatched,
+    ValueOrigin,
     ValueQuote,
+    ValueResolution,
 )
 
 NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
@@ -40,6 +43,13 @@ def identity(card_name: str = "Umbreon VMAX", **overrides) -> CardIdentity:
     return CardIdentity(**fields)
 
 
+TIER_NAMES = {
+    TierType.GRAIL: "Grail",
+    TierType.CHASE: "Chase",
+    TierType.LINE_UP: "Lineup",
+}
+
+
 def checklist_card(
     card_id: str,
     card_name: str | None = None,
@@ -49,15 +59,18 @@ def checklist_card(
     cert: str | None = None,
     label: str | None = None,
     value: float | None = None,
+    tier_type: TierType = TierType.LINE_UP,
+    hit_rate: float = 1.0,
 ) -> ChecklistCard:
-    """A Checklist card whose identity's card name defaults to its id."""
+    """A Checklist card whose identity's card name defaults to its id, in the
+    tier named after `tier_type`."""
     name = card_name if card_name is not None else card_id
     return ChecklistCard(
         card_id=card_id,
         label=label if label is not None else f"label {card_id}",
-        tier_name="Lineup",
-        tier_type=TierType.LINE_UP,
-        hit_rate=1.0,
+        tier_name=TIER_NAMES[tier_type],
+        tier_type=tier_type,
+        hit_rate=hit_rate,
         grader=grader,
         grade=grade,
         market_value=value,
@@ -138,3 +151,26 @@ class FakeProvider:
     @property
     def called_names(self) -> list[str | None]:
         return [call.card_name for call in self.calls]
+
+
+def resolution(
+    values: Mapping[str, ValueQuote] | None = None,
+    *,
+    origins: Mapping[str, ValueOrigin] | None = None,
+    needs_review: Iterable[NeedsReview] = (),
+    unavailable: Mapping[str, str] | None = None,
+) -> ValueResolution:
+    """A ValueResolution built by hand. Each value's origin defaults to
+    FETCHED."""
+    values = dict(values or {})
+    found = {card_id: ValueOrigin.FETCHED for card_id in values}
+    found.update(origins or {})
+    return ValueResolution(
+        values=values,
+        needs_review=tuple(needs_review),
+        origins=found,
+        unavailable=dict(unavailable or {}),
+    )
+
+
+NO_VALUES = resolution()

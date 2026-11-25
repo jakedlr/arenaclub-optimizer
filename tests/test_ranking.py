@@ -2,6 +2,7 @@ import dataclasses
 from datetime import UTC, datetime
 
 import pytest
+from fake_values import NO_VALUES, NOW, Clock, quote, resolution
 
 from arenaclub_optimizer.arena_mapping import PackRates
 from arenaclub_optimizer.config import Config, Override, Overrides
@@ -24,9 +25,14 @@ from arenaclub_optimizer.ranking import (
     rank,
 )
 from arenaclub_optimizer.risk import evaluate_risk
+from arenaclub_optimizer.values import (
+    CreditBudget,
+    ValueCache,
+    ValueQuote,
+    resolve_values,
+)
 
 RATES = PackRates(buyback_rate=0.9, slab_safe_floor=0.8)
-NO_OVERRIDES = Overrides()
 WHEN = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 
@@ -108,9 +114,9 @@ def with_filters(config: Config | None = None, **filters) -> Config:
     )
 
 
-def run(packs, config: Config | None = None, overrides=NO_OVERRIDES, **kwargs):
+def run(packs, config: Config | None = None, values=NO_VALUES, **kwargs):
     pairs = [p if isinstance(p, tuple) else (p, RATES) for p in packs]
-    return rank(pairs, config or Config(), overrides, generated_at=WHEN, **kwargs)
+    return rank(pairs, config or Config(), values, generated_at=WHEN, **kwargs)
 
 
 def ids(report: RankingReport) -> list[str]:
@@ -209,14 +215,14 @@ def test_p_at_least_multiples_come_from_the_risk_result():
     assert result.p_10x == pytest.approx(0.005)
 
 
-# --- Manual Overrides ---------------------------------------------------------
+# --- resolved values ------------------------------------------------------------
 
 
-def test_manual_override_by_card_id_sets_the_market_value():
+def test_a_resolved_value_sets_the_market_value_and_confidence():
     p = pack("p", [card("card_x", 1.0, None)])
-    overrides = Overrides(by_card_id={"card_x": Override(market_value=150.0)})
+    values = resolution({"card_x": quote(150.0, "pokeprice")})
 
-    report = run([p], overrides=overrides)
+    report = run([p], values=values)
 
     [result] = report.results
     [valued] = result.pack.checklist
@@ -225,46 +231,97 @@ def test_manual_override_by_card_id_sets_the_market_value():
     assert result.ev.buyback_ev == pytest.approx(0.9 * 150 - 100)
 
 
-def test_manual_override_by_cert_number_wins_over_card_id():
+def test_a_resolved_value_replaces_an_existing_market_value():
+    p = pack("p", [card("card_x", 1.0, 50.0)])
+    values = resolution({"card_x": quote(500.0, "cardvolume")})
+
+    [result] = run([p], values=values).results
+
+    assert result.pack.checklist[0].market_value == 500.0
+
+
+def test_cards_without_a_resolved_value_are_left_as_they_are():
+    p = pack("p", [card("card_x", 0.5, 80.0), card("card_y", 0.5, None)])
+    values = resolution({"card_x": quote(100.0, "pokeprice")})
+
+    [entry] = run([p], values=values).unrankable
+
+    assert [c.market_value for c in entry.pack.checklist] == [100.0, None]
+
+
+def test_resolved_values_are_keyed_on_card_id_not_label():
+    twins = [
+        card("card_1", 0.5, None, label="2021 Umbreon #215 PSA 10"),
+        card("card_2", 0.5, None, label="2021 Umbreon #215 PSA 10"),
+    ]
+    values = resolution({"card_1": quote(200.0, "pokeprice")})
+
+    [entry] = run([pack("p", twins)], values=values).unrankable
+
+    assert entry.value_coverage == pytest.approx(0.5)
+
+
+def test_resolved_values_can_make_a_pack_rankable():
+    p = unvalued_pack("u")
+    values = resolution({"card_u_b": quote(0.0, "pokeprice")})
+
+    assert run([p]).results == ()
+    assert ids(run([p], values=values)) == ["u"]
+
+
+def test_manual_overrides_reach_ranking_through_the_resolver(tmp_path):
     p = pack("p", [card("card_x", 1.0, None, cert="12345678")])
     overrides = Overrides(
         by_cert={"12345678": Override(market_value=300.0)},
         by_card_id={"card_x": Override(market_value=10.0)},
     )
+    with ValueCache(tmp_path) as cache:
+        budget = CreditBudget(cache, clock=Clock(NOW))
+        values = resolve_values(p.checklist, [], overrides, cache, budget)
 
-    [result] = run([p], overrides=overrides).results
+    [result] = run([p], values=values).results
 
-    assert result.pack.checklist[0].market_value == 300.0
-
-
-def test_manual_override_replaces_an_existing_market_value():
-    p = pack("p", [card("card_x", 1.0, 50.0)])
-    overrides = Overrides(by_card_id={"card_x": Override(market_value=500.0)})
-
-    [result] = run([p], overrides=overrides).results
-
-    assert result.pack.checklist[0].market_value == 500.0
+    [valued] = result.pack.checklist
+    assert valued.market_value == 300.0
+    assert valued.value_confidence is ValueConfidence.HIGH
 
 
-def test_manual_overrides_are_keyed_on_card_id_not_label():
-    twins = [
-        card("card_1", 0.5, None, label="2021 Umbreon #215 PSA 10"),
-        card("card_2", 0.5, None, label="2021 Umbreon #215 PSA 10"),
-    ]
-    overrides = Overrides(by_card_id={"card_1": Override(market_value=200.0)})
-
-    report = run([pack("p", twins)], overrides=overrides)
-
-    [entry] = report.unrankable
-    assert entry.value_coverage == pytest.approx(0.5)
+def test_the_report_carries_the_value_resolution():
+    values = resolution({"card_x": quote(1.0, "pokeprice")})
+    assert run([], values=values).values is values
 
 
-def test_manual_overrides_can_make_a_pack_rankable():
-    p = unvalued_pack("u")
-    overrides = Overrides(by_card_id={"card_u_b": Override(market_value=0.0)})
+# --- the low-confidence note --------------------------------------------------------
 
-    assert run([p]).results == ()
-    assert ids(run([p], overrides=overrides)) == ["u"]
+
+def low(value: float) -> ValueQuote:
+    return quote(value, "pokeprice", confidence=ValueConfidence.LOW)
+
+
+def test_low_confidence_values_get_a_note_with_their_count():
+    p = pack(
+        "p",
+        [card("card_a", 0.4, None), card("card_b", 0.3, None), card("card_c", 0.3)],
+    )
+    values = resolution({"card_a": low(150.0), "card_b": low(150.0)})
+
+    [result] = run([p], values=values).results
+
+    assert "2 cards valued at low confidence." in result.notes
+
+
+def test_one_low_confidence_value_reads_in_the_singular():
+    p = pack("p", [card("card_a", 0.5, None), card("card_b", 0.5)])
+    values = resolution({"card_a": low(250.0)})
+
+    [result] = run([p], values=values).results
+
+    assert "1 card valued at low confidence." in result.notes
+
+
+def test_high_confidence_values_get_no_confidence_note():
+    [result] = run([flat_pack("p", 150)]).results
+    assert not any("confidence" in note for note in result.notes)
 
 
 # --- exclusions -----------------------------------------------------------------
@@ -487,7 +544,7 @@ def test_report_carries_generated_at():
 
 def test_generated_at_defaults_to_now_in_utc():
     before = datetime.now(UTC)
-    report = rank([], Config(), NO_OVERRIDES)
+    report = rank([], Config(), NO_VALUES)
     after = datetime.now(UTC)
 
     assert report.generated_at.tzinfo is not None
@@ -506,7 +563,7 @@ def test_report_holds_tuples_of_typed_entries():
 def test_rank_accepts_any_iterable_of_pairs():
     pairs = ((p, RATES) for p in [flat_pack("a", 120), flat_pack("b", 130)])
 
-    report = rank(pairs, Config(), NO_OVERRIDES, generated_at=WHEN)
+    report = rank(pairs, Config(), NO_VALUES, generated_at=WHEN)
 
     assert ids(report) == ["b", "a"]
 
