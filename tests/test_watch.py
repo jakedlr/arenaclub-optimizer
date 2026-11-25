@@ -6,6 +6,7 @@ notifier."""
 import json
 import logging
 import random
+import signal
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import replace
@@ -203,6 +204,15 @@ class World:
 @pytest.fixture
 def world(tmp_path) -> World:
     return World(tmp_path)
+
+
+def run_or_fail(world: World):
+    """`world.run()`, failing the test (rather than stopping pytest) if a
+    KeyboardInterrupt escapes."""
+    try:
+        return world.run()
+    except KeyboardInterrupt:
+        pytest.fail("KeyboardInterrupt escaped run_watch")
 
 
 def blocked(retry_after: float | None = None) -> ArenaBlockedError:
@@ -469,15 +479,47 @@ def test_a_blocked_cycle_keeps_the_pack_entries(world):
     assert state.health is HealthKind.BLOCKED
 
 
-def test_a_value_cache_error_is_logged_and_backed_off_without_an_alert(world, caplog):
+def test_a_value_cache_error_is_logged_and_backed_off(world, caplog):
     world.values.error = sqlite3.OperationalError("database is locked")
 
     world.run(cycles=2)
 
-    assert world.notifier.sent == []
     assert world.clock.sleeps == [600.0]
     assert "database is locked" in caplog.text
     assert "database is locked" in world.lines[0]
+    assert load_state(world.state_dir).health is HealthKind.VALUE_CACHE
+
+
+def test_a_value_cache_outage_sends_one_health_alert_and_one_recovery(world):
+    world.values.error = sqlite3.OperationalError("database is locked")
+
+    def on_sleep(n):
+        # Cycles 1-3 can't use the cache, cycle 4 can.
+        if n == 3:
+            world.values.error = None
+
+    world.clock.on_sleep = on_sleep
+
+    world.run(cycles=4)
+
+    assert world.kinds() == [
+        AlertKind.HEALTH_FAILED,
+        AlertKind.HEALTH_RECOVERED,
+        AlertKind.ENTERED,
+        AlertKind.ENTERED,
+    ]
+    failed = world.notifier.sent[0]
+    assert failed.title == "Watch Mode can't use its value cache"
+    assert "database is locked" in failed.message
+
+
+def test_a_value_cache_error_keeps_the_pack_entries(world):
+    world.run(cycles=1)
+    world.values.error = OSError("disk full")
+
+    world.run(cycles=1)
+
+    assert set(load_state(world.state_dir).packs) == {"gold-pokemon", "gold-football"}
 
 
 # --- fresh resources ----------------------------------------------------------------
@@ -540,6 +582,25 @@ def test_a_failed_alert_is_retried_next_cycle(world):
         "New Top Result: Gold Pokemon",
         "New Top Result: Gold Football",
     ]
+
+
+def test_a_failed_improved_alert_is_retried_next_cycle(world):
+    seen = AlertedPack(0.08, T0 - timedelta(hours=1))
+    save_state(
+        AlertState(packs={"gold-pokemon": seen, "gold-football": seen}),
+        world.state_dir,
+    )
+    world.notifier.failing = True
+
+    def on_sleep(n):
+        world.notifier.failing = False
+
+    world.clock.on_sleep = on_sleep
+
+    world.run(cycles=2)
+
+    assert world.kinds() == [AlertKind.IMPROVED]
+    assert load_state(world.state_dir).packs["gold-pokemon"].buyback_ev_pct > 0.4
 
 
 def test_a_failed_health_alert_is_retried_next_cycle(world):
@@ -623,6 +684,49 @@ def test_an_interrupt_mid_cycle_abandons_it_and_keeps_the_last_state(world):
     data = json.loads((world.state_dir / STATE_FILENAME).read_text())
     assert set(data["packs"]) == {"gold-pokemon", "gold-football"}
     assert world.lines[-1] == "Stopped; Alert state saved."
+
+
+def test_a_second_interrupt_during_the_shutdown_save_is_ignored(world, monkeypatch):
+    real_save = save_state
+    calls = []
+
+    def save_then_interrupt(state, directory=None):
+        calls.append(state)
+        if len(calls) == 2:  # the save on shutdown: Ctrl+C again
+            signal.raise_signal(signal.SIGINT)
+        real_save(state, directory)
+
+    monkeypatch.setattr("arenaclub_optimizer.watch.save_state", save_then_interrupt)
+
+    def stop(n):
+        raise KeyboardInterrupt
+
+    world.clock.on_sleep = stop
+
+    run_or_fail(world)
+
+    assert len(calls) == 2
+    assert world.lines[-1] == "Stopped; Alert state saved."
+    # Ctrl+C works as usual again afterwards.
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_an_interrupt_while_loading_the_state_saves_nothing(world, monkeypatch):
+    seen = AlertedPack(0.08, T0 - timedelta(hours=1))
+    save_state(AlertState(packs={"gold-pokemon": seen}), world.state_dir)
+    before = (world.state_dir / STATE_FILENAME).read_bytes()
+
+    def interrupted(directory=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("arenaclub_optimizer.watch.load_state", interrupted)
+
+    cycle = run_or_fail(world)
+
+    assert cycle is None
+    assert world.clients == 0
+    assert (world.state_dir / STATE_FILENAME).read_bytes() == before
+    assert world.lines == ["Stopped."]
 
 
 # --- quiet ----------------------------------------------------------------------

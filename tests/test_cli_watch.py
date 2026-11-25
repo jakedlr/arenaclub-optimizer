@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import signal
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from typer.testing import CliRunner
 
 from arenaclub_optimizer import cli
 from arenaclub_optimizer.alerts import STATE_FILENAME
+from arenaclub_optimizer.arena_client import ArenaApiError, ArenaBlockedError
 from arenaclub_optimizer.cli import app
 from arenaclub_optimizer.notify import NtfyNotifier
 from arenaclub_optimizer.valuation import ValueSources
@@ -240,16 +242,23 @@ def test_the_metric_options_drop_gold_pokemon_or_football(world, ntfy, args):
     assert len(ntfy.titles()) == 1
 
 
-def test_a_failed_cycle_with_once_exits_1(world, ntfy):
-    from arenaclub_optimizer.arena_client import ArenaBlockedError
-
+def test_a_blocked_cycle_with_once_exits_2_like_rank(world, ntfy):
     world["arena"].errors[("levels", "")] = ArenaBlockedError(429, 30.0)
 
     result = watch("--once")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert ntfy.titles() == ["Arena Club is blocking requests"]
     assert "HTTP 429" in result.stdout.splitlines()[-1]
+
+
+def test_another_failed_cycle_with_once_exits_1(world, ntfy):
+    world["arena"].errors[("levels", "")] = ArenaApiError("HTTP 503", 503)
+
+    result = watch("--once")
+
+    assert result.exit_code == 1
+    assert ntfy.titles() == ["Arena Club requests are failing"]
 
 
 def test_a_second_once_run_sends_nothing_new(world, ntfy):
@@ -352,13 +361,14 @@ def test_watch_help_lists_the_options():
         assert option in text
 
 
-def test_watch_has_no_top_option(world):
+def test_watch_has_no_top_option(config_dir):
     # Alerts cover every Slab Pack that meets the criteria, and watch
-    # prints no table, so a top-N cut would do nothing.
-    result = watch("--once", "--top", "3")
+    # prints no table, so a top-N cut would do nothing. The other options
+    # come first, so the error is about --top, not an unknown --once.
+    result = watch("--once", "--category", "pokemon", "--top", "3")
 
     assert result.exit_code == 2
-    assert "--top" in ANSI_ESCAPE.sub("", result.stderr)
+    assert "No such option: --top" in ANSI_ESCAPE.sub("", result.stderr)
 
 
 # --- fresh resources ---------------------------------------------------------------
@@ -401,6 +411,27 @@ def test_sigterm_stops_the_loop_like_ctrl_c(world, clock, state_dir):
     assert signal.getsignal(signal.SIGTERM) is before
 
 
+def test_sigterm_during_the_shutdown_save_is_ignored(world, clock, monkeypatch):
+    import arenaclub_optimizer.watch as watch_module
+
+    real_save = watch_module.save_state
+    calls = []
+
+    def save_then_sigterm(state, directory=None):
+        calls.append(state)
+        if len(calls) == 2:  # the save on shutdown, as a second pkill lands
+            signal.raise_signal(signal.SIGTERM)
+        real_save(state, directory)
+
+    monkeypatch.setattr(watch_module, "save_state", save_then_sigterm)
+    stop_after(clock, 1)
+
+    result = watch()
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == "Stopped; Alert state saved."
+
+
 def test_ctrl_c_mid_cycle_exits_0(world, clock):
     world["arena"].errors[("pack", "gold-football")] = KeyboardInterrupt()
 
@@ -408,6 +439,25 @@ def test_ctrl_c_mid_cycle_exits_0(world, clock):
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines()[-1] == "Stopped; Alert state saved."
+
+
+@pytest.fixture
+def los_angeles(monkeypatch):
+    """Local time 8 hours behind UTC in November."""
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_log_timestamps_are_utc_like_the_summary_lines(los_angeles):
+    record = logging.LogRecord("x", logging.WARNING, __file__, 1, "msg", (), None)
+    record.created = T0.timestamp()
+
+    line = cli.log_formatter().format(record)
+
+    assert line.startswith("2026-11-26 10:00:00 UTC WARNING")
 
 
 # --- logging ----------------------------------------------------------------------
