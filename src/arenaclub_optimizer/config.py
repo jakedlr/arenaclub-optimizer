@@ -124,6 +124,21 @@ def cache_dir(
     return (home if home is not None else Path.home()) / ".cache" / APP_DIR_NAME
 
 
+def state_dir(
+    environ: Mapping[str, str] | None = None, home: Path | None = None
+) -> Path:
+    """Return the app's state directory, honouring `XDG_STATE_HOME`.
+
+    Per the XDG spec, an unset, empty or relative `XDG_STATE_HOME` is ignored.
+    """
+    env = os.environ if environ is None else environ
+    xdg = env.get("XDG_STATE_HOME", "")
+    if xdg and Path(xdg).is_absolute():
+        return Path(xdg) / APP_DIR_NAME
+    home = home if home is not None else Path.home()
+    return home / ".local" / "state" / APP_DIR_NAME
+
+
 def load_config(path: Path | None = None, *, directory: Path | None = None) -> Config:
     """Read the config file. `path` wins over `directory`; both default sensibly."""
     path = _resolve(path, directory, CONFIG_FILENAME)

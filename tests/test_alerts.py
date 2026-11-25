@@ -453,7 +453,11 @@ def test_a_long_error_is_cut_to_fit_the_message_limit():
     assert alert is not None
     size = len(alert.message.encode("utf-8"))
     assert size <= MAX_MESSAGE_BYTES < 4096
-    assert alert.message.endswith("…")
+    first, *rest = alert.message.splitlines()
+    assert first.endswith("…")
+    assert rest == [
+        "Watch Mode is backing off and will send one Alert when requests work again."
+    ]
 
 
 @pytest.mark.parametrize(
