@@ -6,6 +6,7 @@ Pure data and arithmetic: no I/O and no HTTP. Vocabulary follows GLOSSARY.md.
 import dataclasses
 import math
 import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -47,7 +48,8 @@ class ChecklistCard:
     """One card on a Slab Pack's Checklist.
 
     `hit_rate` is a probability from 0 to 1, not a percentage. `market_value` is
-    in dollars, or None when no Market Value is known.
+    in dollars, or None when no Market Value is known. `cert_number` is the
+    grading company's cert number, when known; Manual Overrides can key on it.
 
     Raises ValueError if `market_value` is NaN, infinite or negative.
     """
@@ -61,6 +63,7 @@ class ChecklistCard:
     grade: str
     market_value: float | None
     value_confidence: ValueConfidence | None
+    cert_number: str | None = None
 
     def __post_init__(self) -> None:
         value = self.market_value
@@ -85,6 +88,23 @@ class SlabPack:
     active: bool
     checklist: tuple[ChecklistCard, ...]
     insurance_available: bool = True
+
+
+@dataclass(frozen=True)
+class SkippedPack:
+    """A Slab Pack that couldn't be evaluated. `name` is e.g. "Gold Pokemon"."""
+
+    pack_id: str
+    name: str
+    reason: str
+
+
+def category_key(name: str) -> str:
+    """`name` folded for comparison: case, accents and spacing are ignored,
+    so "Pokémon", "POKEMON" and " pokemon " all match."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(stripped.casefold().split())
 
 
 class NormalizationStatus(StrEnum):

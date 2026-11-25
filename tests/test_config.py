@@ -16,6 +16,7 @@ from arenaclub_optimizer.config import (
     config_dir,
     load_config,
     load_overrides,
+    override_config,
 )
 from arenaclub_optimizer.cost import PaymentMethod
 
@@ -452,6 +453,117 @@ def test_override_value_is_float(tmp_path):
     value = overrides.lookup("card_x", "1")
     assert isinstance(value, float)
     assert math.isclose(value, 3.0)
+
+
+# --- override_config ---------------------------------------------------------
+
+
+def test_override_config_replaces_top_level_and_filter_values():
+    config = override_config(
+        Config(), {"k": 1.2, "filters": {"top": 3, "categories": ["Pokemon"]}}
+    )
+
+    assert config.k == 1.2
+    assert config.filters.top == 3
+    assert config.filters.categories == ("Pokemon",)
+
+
+def test_override_config_leaves_none_values_and_other_settings_alone(tmp_path):
+    base = load_config(
+        write(
+            tmp_path / "c.toml",
+            "k = 0.8\ntax_rate = 0.05\n[filters]\nprice_min = 20\ntop = 4\n"
+            '[watch]\ntopic = "my-topic"\n',
+        )
+    )
+
+    config = override_config(
+        base, {"k": None, "filters": {"top": None, "price_max": 90.0}}
+    )
+
+    assert config == Config(
+        k=0.8,
+        tax_rate=0.05,
+        filters=Filters(price_min=20.0, price_max=90.0, top=4),
+        watch=Watch(topic="my-topic"),
+    )
+
+
+def test_override_config_with_no_changes_round_trips():
+    config = Config(
+        payment_method=PaymentMethod.ach,
+        filters=Filters(categories=("A", "B"), min_ev_pct=-0.1, min_p_profit=0.3),
+    )
+
+    assert override_config(config, {}) == config
+
+
+def test_override_config_does_not_change_its_input():
+    base = Config()
+
+    override_config(base, {"k": 2.0})
+
+    assert base == Config()
+
+
+@pytest.mark.parametrize(
+    ("changes", "key"),
+    [
+        ({"k": 0.0}, "k"),
+        ({"k": -1.0}, "k"),
+        ({"k": math.nan}, "k"),
+        ({"k": math.inf}, "k"),
+        ({"filters": {"top": 0}}, "filters.top"),
+        ({"filters": {"price_min": -1.0}}, "filters.price_min"),
+        ({"filters": {"price_max": -1.0}}, "filters.price_max"),
+        ({"filters": {"min_p_profit": 1.5}}, "filters.min_p_profit"),
+        ({"filters": {"min_p_profit": -0.1}}, "filters.min_p_profit"),
+        ({"filters": {"min_ev_pct": math.nan}}, "filters.min_ev_pct"),
+        ({"filters": {"price_min": 200.0, "price_max": 100.0}}, "filters.price_min"),
+        ({"filters": {"nonsense": 1}}, "filters.nonsense"),
+        ({"bogus": 1}, "bogus"),
+    ],
+)
+def test_override_config_validates_like_the_file(changes, key):
+    with pytest.raises(ConfigError) as info:
+        override_config(Config(), changes)
+
+    message = str(info.value)
+    assert message.startswith("command line: ")
+    assert key in message
+
+
+def test_override_config_checks_price_range_against_the_file_value(tmp_path):
+    base = load_config(write(tmp_path / "c.toml", "[filters]\nprice_max = 100\n"))
+
+    with pytest.raises(ConfigError, match="price_min"):
+        override_config(base, {"filters": {"price_min": 150.0}})
+
+
+def test_override_config_names_keys_by_their_display_names():
+    names = {"filters.top": "--top", "k": "--k"}
+
+    with pytest.raises(ConfigError) as info:
+        override_config(
+            Config(), {"filters": {"top": 0}}, source="options", names=names
+        )
+
+    assert str(info.value) == "options: --top must be at least 1, got 0"
+
+
+def test_override_config_display_names_reach_the_price_range_message():
+    names = {"filters.price_min": "--price-min", "filters.price_max": "--price-max"}
+
+    with pytest.raises(ConfigError) as info:
+        override_config(
+            Config(),
+            {"filters": {"price_min": 200.0, "price_max": 100.0}},
+            names=names,
+        )
+
+    assert "--price-min" in str(info.value)
+    assert "--price-max" in str(info.value)
+    assert "filters." not in str(info.value)
 
 
 # --- example files ----------------------------------------------------------
