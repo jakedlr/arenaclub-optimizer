@@ -18,6 +18,7 @@ client, value sources and notifier, so tests run the loop on fakes.
 Vocabulary follows GLOSSARY.md; the rules are in docs/plan.md (Watch Mode).
 """
 
+import itertools
 import logging
 import sqlite3
 import time
@@ -260,30 +261,30 @@ def run_watch(
     backoff = Backoff(interval)
     state = load_state(state_directory)
     last: Cycle | None = None
-    count = 0
+
+    def show(cycle: Cycle, backing_off: float | None = None) -> None:
+        if not (quiet and cycle.ok):
+            echo(summary_line(cycle, backing_off=backing_off))
+
     try:
-        while True:
+        for count in itertools.count(1):
             start = clock.monotonic()
             last = run_cycle(
                 config, overrides, state, resources, now=clock.now(), topic=topic
             )
             state = last.state
-            count += 1
             _save(state, state_directory)
-            final = max_cycles is not None and count >= max_cycles
-            wait: float | None = None
-            if final:
-                delay = 0.0
-            elif last.ok:
-                backoff.reset()
-                delay = next_delay(interval, clock.monotonic() - start, rng)
-            else:
-                delay = wait = backoff.next(last.retry_after)
-            if not (quiet and last.ok):
-                echo(summary_line(last, backing_off=wait))
-            if final:
+            if max_cycles is not None and count >= max_cycles:
+                show(last)
                 return last
-            clock.sleep(delay)
+            if last.ok:
+                backoff.reset()
+                show(last)
+                clock.sleep(next_delay(interval, clock.monotonic() - start, rng))
+            else:
+                wait = backoff.next(last.retry_after)
+                show(last, backing_off=wait)
+                clock.sleep(wait)
     except KeyboardInterrupt:
         if _save(state, state_directory):
             echo("Stopped; Alert state saved.")
