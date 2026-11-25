@@ -33,7 +33,7 @@ For each Slab Pack it works out the **expected value** (EV) of one Rip: what you
 
 ## Setup (one time)
 
-You need a terminal on Linux or macOS. On Windows, first install WSL (Windows Subsystem for Linux): open PowerShell as administrator, run `wsl --install`, restart, and then use the "Ubuntu" app as your terminal. You also need `git`. Check by running `git --version`; on Ubuntu/WSL, install it with `sudo apt install git` if it's missing.
+You need a terminal on Linux or macOS. On Windows, first install WSL (Windows Subsystem for Linux): open PowerShell as administrator, run `wsl --install`, restart, and then use the "Ubuntu" app as your terminal. You also need `git`. Check by running `git --version`; on Ubuntu/WSL, install it with `sudo apt update && sudo apt install git` if it's missing.
 
 Every command below is typed into that terminal, one line at a time. Press Enter after each.
 
@@ -64,7 +64,7 @@ uv sync
    (umask 077; echo 'POKEPRICE_API_KEY=paste-your-key-here' > .env)
    ```
 
-   This creates a file named `.env` that only you can read. It is never uploaded to GitHub. Don't share your key or paste it anywhere public.
+   This creates a file named `.env` that only you can read. If you already had a `.env`, also run `chmod 600 .env`. It is never uploaded to GitHub. Don't share your key or paste it anywhere public.
 
 **4. Check it works.**
 
@@ -400,7 +400,7 @@ mkdir -p ~/.config/arenaclub-optimizer
 cp docs/config.example.toml ~/.config/arenaclub-optimizer/config.toml
 ```
 
-Then edit `~/.config/arenaclub-optimizer/config.toml` in any text editor, for example with `nano ~/.config/arenaclub-optimizer/config.toml` (save with Ctrl+O, exit with Ctrl+X). A `#` starts a comment, so remove it from a line to turn that setting on. Every setting, with its default:
+Then edit `~/.config/arenaclub-optimizer/config.toml` in any text editor, for example with `nano ~/.config/arenaclub-optimizer/config.toml` (save with Ctrl+O, exit with Ctrl+X). A `#` starts a comment. To turn on a setting that's shown commented out, such as `# price_min = 50`, remove its `#`. Only do this on setting lines; removing the `#` from a plain-English line breaks the file. Every setting, with its default:
 
 | Setting | Meaning | Default |
 |---|---|---|
@@ -454,7 +454,7 @@ From the `arenaclub-optimizer` folder, paste this whole block. Change the filter
 
 ### Option B: systemd user service (starts automatically)
 
-The full instructions are at the top of [`docs/arena-watch.service`](docs/arena-watch.service). In short:
+The full instructions are at the top of [`docs/arena-watch.service`](docs/arena-watch.service). On WSL, first turn systemd on as that file describes. Then, from the `arenaclub-optimizer` folder:
 
 ```sh
 mkdir -p ~/.config/systemd/user
