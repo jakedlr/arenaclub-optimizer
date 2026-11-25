@@ -270,6 +270,23 @@ def test_provider_id_can_be_replaced(cache):
     assert cache.get_provider_id("pokeprice", "k") == "2"
 
 
+def test_provider_id_can_be_deleted_for_one_provider_and_key(cache):
+    cache.put_provider_id("pokeprice", "k", "1")
+    cache.put_provider_id("pokeprice", "other", "2")
+    cache.put_provider_id("cardvolume", "k", "3")
+
+    cache.delete_provider_id("pokeprice", "k")
+
+    assert cache.get_provider_id("pokeprice", "k") is None
+    assert cache.get_provider_id("pokeprice", "other") == "2"
+    assert cache.get_provider_id("cardvolume", "k") == "3"
+
+
+def test_deleting_a_missing_provider_id_does_nothing(cache):
+    cache.delete_provider_id("pokeprice", "never stored")
+    assert cache.get_provider_id("pokeprice", "never stored") is None
+
+
 # --- ValueCache: persistence -------------------------------------------------
 
 

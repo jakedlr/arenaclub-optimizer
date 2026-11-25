@@ -11,6 +11,8 @@ schema's own examples. No test calls the live API.
 import dataclasses
 import json
 import logging
+import sqlite3
+import traceback
 from datetime import UTC, date, datetime, timedelta
 from importlib.metadata import version
 from pathlib import Path
@@ -218,7 +220,7 @@ def test_a_first_quote_resolves_the_set_then_the_card_then_prices_it(provider, a
     assert sets["language"] == "english"
     assert sets["limit"] == "5"
     assert cards["setId"] == "604"
-    assert cards["search"] == "4"
+    assert cards["search"] == "Charizard 4"
     assert cards["language"] == "english"
     assert cards["limit"] == "5"
     assert "includeEbay" not in cards
@@ -330,6 +332,114 @@ def test_an_unmatched_card_caches_no_tcgplayer_id(provider, api):
 def test_a_404_on_the_card_is_unmatched(provider, api):
     api.routes[CHARIZARD] = (404, fixture("error_404.json"), {})
     assert provider.quote(charizard()) == Unmatched()
+
+
+def celebrations_routes(api: Api) -> None:
+    """Arena Club's "Celebrations CC" subset isn't a PokéPrice set name, so the
+    set search falls back to "Celebrations", whose #4 is a different card."""
+    api.routes[SETS] = (
+        200,
+        {"data": [{"name": "Celebrations", "tcgPlayerNumericId": 2867}]},
+        {},
+    )
+    api.routes[CARDS] = (
+        200,
+        {"data": [{"tcgPlayerId": "250311", "name": "Palkia", "cardNumber": "4/25"}]},
+        {},
+    )
+
+
+def test_a_number_match_with_another_name_is_unmatched(provider, api):
+    celebrations_routes(api)
+    assert provider.quote(charizard(insert="Celebrations CC")) == Unmatched()
+    assert api.paths == [SETS, CARDS]
+
+
+def test_a_fallback_set_is_not_cached_when_the_card_does_not_match(provider, api):
+    celebrations_routes(api)
+    provider.quote(charizard(insert="Celebrations CC"))
+    api.requests.clear()
+    provider.quote(charizard(insert="Celebrations CC"))
+    assert api.paths == [SETS, CARDS]
+
+
+def test_a_fallback_set_is_cached_once_a_card_matches_in_it(provider, api):
+    api.routes[SETS] = (
+        200,
+        {"data": [{"name": "Base Set (Shadowless)", "tcgPlayerNumericId": 1663}]},
+        {},
+    )
+    assert isinstance(provider.quote(charizard()), ValueQuote)
+    api.requests.clear()
+
+    provider.quote(identity("Blastoise", insert="Base Set", set_number="2"))
+
+    assert api.paths[0] == CARDS
+    assert api.requests[0].url.params["setId"] == "1663"
+
+
+def test_a_tag_team_name_matches_across_slash_and_ampersand(provider, api):
+    tag_team = {
+        "tcgPlayerId": "201280",
+        "name": "Greninja & Zoroark-GX",
+        "cardNumber": "107/214",
+    }
+    decoy = {"tcgPlayerId": "1", "name": "Greninja", "cardNumber": "107"}
+    api.routes[CARDS] = (200, {"data": [decoy, tag_team]}, {})
+    body = fixture("card_charizard_ebay.json")
+    body["data"].update(tag_team)
+    api.routes[f"{API_PATH}/cards/201280"] = (200, body, {})
+
+    result = provider.quote(
+        identity("Greninja/Zoroark GX", insert="Unbroken Bonds", set_number="107")
+    )
+
+    assert isinstance(result, ValueQuote)
+    assert api.paths[-1] == f"{API_PATH}/cards/201280"
+
+
+def test_without_a_name_a_single_number_match_is_enough(provider, api):
+    result = provider.quote(identity(None, insert="Base Set", set_number="4"))
+    assert isinstance(result, ValueQuote)
+    assert api.requests[1].url.params["search"] == "4"
+    assert api.paths[-1] == CHARIZARD
+
+
+def test_the_card_search_sends_name_and_number(provider, api):
+    provider.quote(charizard(set_number="004"))
+    assert api.requests[1].url.params["search"] == "Charizard 004"
+
+
+def test_a_404_on_a_cached_card_forgets_its_tcgplayer_id(provider, api):
+    provider.quote(charizard())
+    api.routes[CHARIZARD] = (404, fixture("error_404.json"), {})
+    assert provider.quote(charizard()) == Unmatched()
+
+    api.routes[CHARIZARD] = "card_charizard_ebay.json"
+    api.requests.clear()
+    assert isinstance(provider.quote(charizard()), ValueQuote)
+    assert api.paths == [CARDS, CHARIZARD]
+
+
+@pytest.mark.parametrize(("field", "value"), [("name", "Palkia"), ("cardNumber", "5")])
+def test_a_cached_id_whose_card_differs_is_forgotten(provider, api, field, value):
+    provider.quote(charizard())
+    body = fixture("card_charizard_ebay.json")
+    body["data"][field] = value
+    api.routes[CHARIZARD] = (200, body, {})
+    assert provider.quote(charizard()) == Unmatched()
+
+    api.routes[CHARIZARD] = "card_charizard_ebay.json"
+    api.requests.clear()
+    assert isinstance(provider.quote(charizard()), ValueQuote)
+    assert api.paths == [CARDS, CHARIZARD]
+
+
+def test_a_fetched_card_without_name_or_number_is_accepted(provider, api):
+    body = fixture("card_charizard_ebay.json")
+    del body["data"]["name"], body["data"]["cardNumber"]
+    api.routes[CHARIZARD] = (200, body, {})
+    assert isinstance(provider.quote(charizard()), ValueQuote)
 
 
 # --- pricing -----------------------------------------------------------------
@@ -458,6 +568,56 @@ def test_an_exhausted_budget_sends_nothing(cache, clock, api):
     assert api.requests == []
 
 
+def test_estimated_cost_when_nothing_is_cached(provider):
+    assert provider.estimated_cost(charizard()) == 8
+    assert provider.estimated_cost(charizard(grader=None, grade=None)) == 7
+
+
+def test_estimated_cost_with_only_the_set_cached(provider):
+    provider.quote(charizard())
+    blastoise = identity("Blastoise", insert="Base Set", set_number="2")
+    assert provider.estimated_cost(blastoise) == 7
+    raw = dataclasses.replace(blastoise, grader=None, grade=None)
+    assert provider.estimated_cost(raw) == 6
+
+
+def test_estimated_cost_with_the_tcgplayer_id_cached(provider):
+    provider.quote(charizard())
+    assert provider.estimated_cost(charizard(grade="9")) == 2
+    assert provider.estimated_cost(charizard(grader=None, grade=None)) == 1
+
+
+def test_estimated_cost_is_zero_when_a_quote_would_send_nothing(
+    provider, cache, budget, api
+):
+    assert provider.estimated_cost(charizard(grader="hga")) == 0
+    nowhere = identity(None, insert=None, subset_name=None, set_name=None)
+    assert provider.estimated_cost(nowhere) == 0
+    with make_provider(cache, budget, api, api_key=None) as keyless:
+        assert keyless.estimated_cost(charizard()) == 0
+
+
+def test_estimated_cost_sends_and_spends_nothing(provider, api, budget):
+    provider.estimated_cost(charizard())
+    assert api.requests == []
+    assert budget.remaining("pokeprice") == 100
+
+
+def test_with_seven_credits_left_a_cached_card_is_still_priced(cache, clock, api):
+    budget = CreditBudget(cache, {"pokeprice": 15}, clock=clock)
+    card = dataclasses.replace(
+        checklist_card("card_2", grade="9"), identity=charizard(grade="9")
+    )
+    with make_provider(cache, budget, api) as provider:
+        provider.quote(charizard())
+        assert budget.remaining("pokeprice") == 7
+
+        resolution = resolve_values([card], [provider], Overrides(), cache, budget)
+
+    assert resolution.values["card_2"].market_value == 1450
+    assert budget.remaining("pokeprice") == 5
+
+
 # --- errors ------------------------------------------------------------------
 
 
@@ -487,6 +647,29 @@ def test_a_429_without_retry_after_uses_resets_at(provider, api):
     with pytest.raises(ProviderUnavailable) as raised:
         provider.quote(charizard())
     assert raised.value.retry_after == TOMORROW_MIDNIGHT
+
+
+def test_a_429_without_a_limit_type_and_a_long_retry_after_is_daily(
+    provider, api, budget
+):
+    body = {"error": "Rate limit exceeded", "message": "Too many requests"}
+    api.routes[SETS] = (429, body, {"Retry-After": "7200"})
+    with pytest.raises(ProviderUnavailable) as raised:
+        provider.quote(charizard())
+    assert raised.value.retry_after == NOW + timedelta(hours=2)
+    assert "daily" in raised.value.reason
+    assert budget.remaining("pokeprice") == 0
+
+
+@pytest.mark.parametrize("seconds", ["30", "3600"])
+def test_a_429_without_a_limit_type_and_a_short_retry_after_is_not_daily(
+    provider, api, budget, seconds
+):
+    body = {"error": "Rate limit exceeded", "message": "Too many requests"}
+    api.routes[SETS] = (429, body, {"Retry-After": seconds})
+    with pytest.raises(ProviderUnavailable):
+        provider.quote(charizard())
+    assert budget.remaining("pokeprice") == 99
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -669,6 +852,48 @@ def test_the_key_never_appears_in_errors_or_logs(cache, budget, caplog, label, r
         assert KEY not in str(vars(provider))
     assert KEY not in _exception_text(raised.value)
     assert KEY not in caplog.text
+
+
+def _traceback_text(error: BaseException) -> str:
+    """`error`'s full traceback, with every frame's locals."""
+    report = traceback.TracebackException.from_exception(error, capture_locals=True)
+    return "".join(report.format())
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
+def test_the_key_is_not_in_a_traceback_with_locals(cache, budget, status):
+    api = Api({SETS: (status, {"error": "x", "message": "y"}, {"Retry-After": "5"})})
+    with make_provider(cache, budget, api) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert api.requests
+    assert KEY not in _traceback_text(raised.value)
+
+
+def test_a_network_error_keeps_no_request_reachable_from_the_error(cache, budget):
+    def fail(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with make_provider(cache, budget, fail) as provider:
+        with pytest.raises(ProviderUnavailable) as raised:
+            provider.quote(charizard())
+    assert raised.value.__context__ is None
+    assert raised.value.__cause__ is None
+    assert KEY not in _traceback_text(raised.value)
+
+
+def test_the_key_is_not_in_the_traceback_of_an_unexpected_error(
+    cache, budget, monkeypatch
+):
+    def broken_exhaust(provider, *, now=None):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(budget, "exhaust", broken_exhaust)
+    api = Api({SETS: (429, fixture("error_429_daily.json"), {"Retry-After": "60"})})
+    with make_provider(cache, budget, api) as provider:
+        with pytest.raises(sqlite3.OperationalError) as raised:
+            provider.quote(charizard())
+    assert KEY not in _traceback_text(raised.value)
 
 
 def test_the_key_never_appears_in_logs_on_success(cache, budget, api, caplog):

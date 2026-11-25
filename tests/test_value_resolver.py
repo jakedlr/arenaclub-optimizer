@@ -268,6 +268,70 @@ def test_the_resolver_checks_the_budget_but_the_provider_spends(cache):
     assert budget.remaining("pp", now=NOW) == 10
 
 
+class EstimatingProvider(FakeProvider):
+    """A FakeProvider whose `estimated_cost` returns `estimate`, recording
+    each identity it is asked about."""
+
+    def __init__(self, *args, estimate: int, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.estimate = estimate
+        self.estimated: list = []
+
+    def estimated_cost(self, identity) -> int:
+        self.estimated.append(identity)
+        return self.estimate
+
+
+def test_the_budget_check_uses_estimated_cost_when_a_provider_has_one(cache):
+    budget = CreditBudget(cache, {"pp": 7}, clock=Clock())
+    provider = EstimatingProvider(
+        "pp",
+        {"card_a": quote(1.0, "pp")},
+        credit_cost=8,
+        budget=budget,
+        spends=2,
+        estimate=2,
+    )
+
+    result = resolve([checklist_card("card_a")], [provider], cache, budget)
+
+    assert result.values["card_a"].source == "pp"
+    assert budget.remaining("pp", now=NOW) == 5
+
+
+def test_a_provider_is_skipped_when_its_estimate_is_more_than_the_budget(cache):
+    budget = CreditBudget(cache, {"pp": 1}, clock=Clock())
+    provider = EstimatingProvider("pp", credit_cost=1, budget=budget, estimate=2)
+
+    result = resolve([checklist_card("card_a")], [provider], cache, budget)
+
+    assert provider.calls == []
+    assert reasons(result) == {
+        "card_a": f"budget exhausted, retry after {TOMORROW_MIDNIGHT}"
+    }
+
+
+def test_estimated_cost_gets_the_identity_the_provider_is_asked_about(cache):
+    budget = CreditBudget(cache, {"pp": 10}, clock=Clock())
+    provider = EstimatingProvider("pp", credit_cost=8, estimate=1)
+    card = checklist_card("card_a", grader="arena_club", grade="9.5")
+
+    resolve([card], [provider], cache, budget)
+
+    [estimated] = provider.estimated
+    assert estimated == provider.calls[0]
+    assert (estimated.grader, estimated.grade) == (None, None)
+
+
+def test_without_estimated_cost_the_budget_check_uses_credit_cost(cache):
+    budget = CreditBudget(cache, {"pp": 7}, clock=Clock())
+    provider = FakeProvider("pp", credit_cost=8, budget=budget, spends=2)
+
+    resolve([checklist_card("card_a")], [provider], cache, budget)
+
+    assert provider.calls == []
+
+
 def test_a_free_provider_is_never_skipped_for_budget(cache):
     budget = CreditBudget(cache, {"cv": 0})
     provider = FakeProvider("cv", {"card_a": quote(1.0, "cv")}, credit_cost=0)
