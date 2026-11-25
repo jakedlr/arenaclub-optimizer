@@ -232,3 +232,104 @@ def test_progress_is_reported_once_per_slab_pack():
     fetch_card_packs(arena, progress=lambda done, total: seen.append((done, total)))
 
     assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+# --- price pre-filter -----------------------------------------------------------
+# sample_arena: Gold ($100) holds gold-pokemon and gold-football (3 cards),
+# Silver ($50) holds silver-pokemon (2 cards).
+
+
+def test_without_a_price_filter_every_card_pack_is_requested():
+    arena = sample_arena()
+
+    fetch_card_packs(arena)
+
+    # 1 Price Level listing + 3 Slab Packs + 5 cards.
+    assert len(arena.calls) == 9
+
+
+def test_price_min_skips_price_levels_before_any_pack_or_card_request():
+    arena = sample_arena()
+
+    result = fetch_card_packs(arena, price_min=60)
+
+    assert sorted(by_id(result)) == ["gold-football", "gold-pokemon"]
+    assert "silver-pokemon" not in arena.requested("pack")
+    assert not {"card_sp_1", "card_sp_2"} & set(arena.requested("card"))
+    # 1 listing + 2 Slab Packs + 3 cards, instead of 9 requests.
+    assert len(arena.calls) == 6
+
+
+def test_price_max_skips_price_levels_before_any_pack_or_card_request():
+    arena = sample_arena()
+
+    result = fetch_card_packs(arena, price_max=75)
+
+    assert sorted(by_id(result)) == ["silver-pokemon"]
+    assert arena.requested("pack") == ["silver-pokemon"]
+    assert sorted(arena.requested("card")) == ["card_sp_1", "card_sp_2"]
+    assert len(arena.calls) == 4
+
+
+def test_price_pre_filter_is_inclusive():
+    arena = sample_arena()
+
+    result = fetch_card_packs(arena, price_min=100, price_max=100)
+
+    assert sorted(by_id(result)) == ["gold-football", "gold-pokemon"]
+    assert len(arena.calls) == 6
+
+
+def test_price_range_matching_no_price_level_makes_only_the_listing_request():
+    arena = sample_arena()
+
+    result = fetch_card_packs(arena, price_min=60, price_max=75)
+
+    assert result == FetchResult((), ())
+    assert arena.calls == [("levels", None)]
+
+
+def test_price_and_category_pre_filters_combine():
+    arena = sample_arena()
+
+    result = fetch_card_packs(arena, ["football"], price_min=60)
+
+    assert sorted(by_id(result)) == ["gold-football"]
+    assert arena.requested("card") == ["card_gf_1"]
+
+
+@pytest.mark.parametrize("price_cents", [None, "lots", True, float("nan")])
+def test_a_price_level_without_a_usable_price_is_kept(price_cents):
+    # The pre-filter must never drop a pack that `rank` would keep, so a
+    # Price Level whose price can't be read is fetched and left to `rank`.
+    arena = sample_arena()
+    if price_cents is None:
+        del arena.levels[1]["priceCents"]
+    else:
+        arena.levels[1]["priceCents"] = price_cents
+
+    result = fetch_card_packs(arena, price_min=60)
+
+    assert "silver-pokemon" in arena.requested("pack")
+    assert "silver-pokemon" in by_id(result)
+
+
+def test_a_pack_listed_under_a_kept_and_a_dropped_price_level_is_fetched():
+    arena = sample_arena()
+    arena.levels.append(level_json("lvl-promo", "Promo", 1000, ["gold-pokemon"]))
+
+    result = fetch_card_packs(arena, price_min=60)
+
+    assert arena.requested("pack").count("gold-pokemon") == 1
+    assert "gold-pokemon" in by_id(result)
+
+
+def test_progress_counts_only_the_packs_left_after_the_price_pre_filter():
+    arena = sample_arena()
+    seen: list[tuple[int, int]] = []
+
+    fetch_card_packs(
+        arena, price_max=75, progress=lambda done, total: seen.append((done, total))
+    )
+
+    assert seen == [(1, 1)]

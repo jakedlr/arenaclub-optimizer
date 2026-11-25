@@ -5,7 +5,8 @@ from importlib.metadata import version
 from typing import Annotated, NoReturn
 
 import typer
-from rich.console import Console
+from rich.console import Console, RenderableType
+from rich.measure import Measurement
 from rich.text import Text
 
 from arenaclub_optimizer.arena_client import (
@@ -20,7 +21,12 @@ from arenaclub_optimizer.config import (
     override_config,
 )
 from arenaclub_optimizer.fetch import ArenaSource, fetch_card_packs
-from arenaclub_optimizer.output import report_json, results_table, summary_line
+from arenaclub_optimizer.output import (
+    note_lines,
+    report_json,
+    results_table,
+    summary_line,
+)
 from arenaclub_optimizer.ranking import rank as rank_packs
 
 app = typer.Typer(help="Rank Arena Club Slab Packs by expected value.")
@@ -71,53 +77,81 @@ def rank(
         list[str] | None,
         typer.Option(
             "--category",
-            help="Category to include, e.g. Pokemon (case-insensitive). "
-            "Repeat for several. Default: all.",
+            help="Category to include, e.g. Pokemon; case and accents are ignored. "
+            "Repeat for several. Default: config file, else all.",
         ),
     ] = None,
     price_min: Annotated[
-        float | None, typer.Option("--price-min", help="Lowest list price, in $.")
+        float | None,
+        typer.Option(
+            "--price-min",
+            help="Lowest list price, in $. Default: config file, else none.",
+        ),
     ] = None,
     price_max: Annotated[
-        float | None, typer.Option("--price-max", help="Highest list price, in $.")
+        float | None,
+        typer.Option(
+            "--price-max",
+            help="Highest list price, in $. Default: config file, else none.",
+        ),
     ] = None,
     min_ev: Annotated[
         float | None,
         typer.Option(
             "--min-ev",
-            help="Minimum Buyback EV %, in percent: 5 means 5%. May be negative.",
+            help="Minimum Buyback EV %, in percent: 5 means 5%. May be negative. "
+            "Default: config file, else none.",
         ),
     ] = None,
     min_p_profit: Annotated[
         float | None,
         typer.Option(
             "--min-p-profit",
-            help="Minimum P(profit), in percent from 0 to 100: 20 means 20%.",
+            help="Minimum P(profit), in percent from 0 to 100: 20 means 20%. "
+            "Default: config file, else none.",
         ),
     ] = None,
     exclude_high_variance: Annotated[
         bool | None,
         typer.Option(
             "--exclude-high-variance/--include-high-variance",
-            help="Drop (or keep) Slab Packs with a High-variance Note.",
+            help="Drop (or keep) Slab Packs with a High-variance Note. "
+            "Default: config file, else keep.",
         ),
     ] = None,
     top: Annotated[
         int | None,
-        typer.Option("--top", help="How many Top Results to show. Default: 10."),
+        typer.Option(
+            "--top",
+            help="How many Top Results to show. Default: config file, else 10.",
+        ),
     ] = None,
     k: Annotated[
         float | None,
-        typer.Option("--k", help="Assumed AC Value / Market Value ratio. Default: 1."),
+        typer.Option(
+            "--k",
+            help="Assumed AC Value / Market Value ratio. Default: config file, else 1.",
+        ),
     ] = None,
+    wide: Annotated[
+        bool,
+        typer.Option(
+            "--wide",
+            help="Also show Market EV %, Slab Safe EV $ and Coverage. "
+            "The default columns fit 80 columns.",
+        ),
+    ] = False,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print JSON instead of a table.")
     ] = False,
 ) -> None:
     """Print the Top Results: card Slab Packs ordered by Buyback EV %.
 
-    Options override the config file. Percentages are given in percent (5 = 5%);
-    the config file writes the same settings as fractions (0.05).
+    Every option defaults to the config file, config.toml in
+    $XDG_CONFIG_HOME/arenaclub-optimizer (else ~/.config/arenaclub-optimizer),
+    and to the built-in default where the file doesn't set it. Percentages are
+    given in percent (5 = 5%); the config file writes the same settings as
+    fractions (0.05).
     """
     errors = Console(stderr=True)
     try:
@@ -144,7 +178,11 @@ def rank(
     try:
         with make_client() as client, _progress(errors) as progress:
             fetched = fetch_card_packs(
-                client, config.filters.categories, progress=progress
+                client,
+                config.filters.categories,
+                price_min=config.filters.price_min,
+                price_max=config.filters.price_max,
+                progress=progress,
             )
     except ArenaBlockedError as error:
         _fail(
@@ -165,11 +203,16 @@ def rank(
 
     console = Console()
     if report.results:
-        console.print(results_table(report, config.k))
+        _print_untruncated(console, results_table(report, config.k, wide=wide))
     else:
         console.print("No Slab Packs met the criteria.")
-    # Text, not str: pack names and reasons come from Arena Club and may hold
-    # brackets that rich would otherwise parse as markup.
+    # Text, not str: pack names, notes and reasons come from Arena Club and
+    # may hold brackets that rich would otherwise parse as markup.
+    notes = note_lines(report)
+    if notes:
+        console.print("Notes:")
+    for note in notes:
+        console.print(Text(f"- {note}"))
     for skipped in report.skipped:
         console.print(Text(f"Skipped {skipped.name}: {skipped.reason}"))
     console.print(Text(summary_line(report)))
@@ -189,6 +232,20 @@ def _fraction(percent: float | None) -> float | None:
 def _fail(message: str, code: int) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code=code)
+
+
+def _print_untruncated(console: Console, renderable: RenderableType) -> None:
+    """Print `renderable` no narrower than it can go without truncating, so a
+    figure is never cut short: on a terminal too narrow for it, such as
+    `--wide` at 80 columns, it runs past the edge instead."""
+    unbounded = console.options.update_width(10_000)
+    needed = Measurement.get(console, unbounded, renderable).minimum
+    width = console.width
+    console.width = max(width, needed)
+    try:
+        console.print(renderable)
+    finally:
+        console.width = width
 
 
 @contextmanager

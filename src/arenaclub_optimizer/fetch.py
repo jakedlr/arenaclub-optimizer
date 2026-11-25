@@ -1,11 +1,13 @@
 """Fetch every card Slab Pack from Arena Club and map it to the domain model.
 
 The only module that drives the client for `rank`. It asks for as little as it
-can: Category filtering happens before any card is requested, and packs the
-ranking would leave out anyway (inactive, or with Buyback disabled) cost no
+can: Price Levels outside the price range are dropped before any Slab Pack is
+requested, Category filtering happens before any card is requested, and packs
+the ranking would leave out anyway (inactive, or with Buyback disabled) cost no
 card requests.
 """
 
+import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -47,13 +49,19 @@ def fetch_card_packs(
     client: ArenaSource,
     categories: Iterable[str] | None = None,
     *,
+    price_min: float | None = None,
+    price_max: float | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> FetchResult:
     """Fetch every Slab Pack whose Product Type is card, with its cards.
 
-    Lists the Price Levels, keeps the card ones, fetches each of their Slab
-    Packs once, and drops any outside `categories` (compared like
+    Lists the Price Levels, keeps the card ones priced within `price_min` to
+    `price_max` dollars (inclusive; None means unbounded), fetches each of
+    their Slab Packs once, and drops any outside `categories` (compared like
     `model.category_key`; empty or None means all) before requesting cards.
+    The price check is only a pre-filter on the Price Level's `priceCents`:
+    a level whose price can't be read is kept, and `ranking.rank` checks each
+    pack's own price again.
     Cards go through the client, whose cache makes repeats free. An inactive
     pack, or one with Buyback disabled, comes back with an empty Checklist and
     costs no card requests, since `ranking.rank` leaves it out either way.
@@ -65,7 +73,12 @@ def fetch_card_packs(
     ArenaApiError if the Price Levels can't be listed.
     """
     wanted = {category_key(c) for c in categories or ()}
-    queue = _card_pack_ids(client.list_price_levels())
+    levels = [
+        level
+        for level in client.list_price_levels()
+        if _may_be_in_price_range(level, price_min, price_max)
+    ]
+    queue = _card_pack_ids(levels)
     packs: list[tuple[SlabPack, PackRates]] = []
     skipped: list[SkippedPack] = []
 
@@ -95,6 +108,23 @@ def _card_pack_ids(levels: list[Json]) -> list[tuple[str, str]]:
         for pack_id in level.get("repackSeriesIds") or ():
             seen.setdefault(str(pack_id), str(level.get("name", "")))
     return list(seen.items())
+
+
+def _may_be_in_price_range(
+    level: Json, price_min: float | None, price_max: float | None
+) -> bool:
+    """False only when the Price Level's price is known and outside the range,
+    so the pre-filter never drops a pack that `ranking.rank` would keep."""
+    cents = level.get("priceCents")
+    if isinstance(cents, bool) or not isinstance(cents, int | float):
+        return True
+    if not math.isfinite(cents):
+        return True
+    # The same arithmetic as SlabPack.price, so the bounds agree with `rank`.
+    price = cents / 100
+    if price_min is not None and price < price_min:
+        return False
+    return price_max is None or price <= price_max
 
 
 def _fetch_one(client: ArenaSource, pack_json: Json) -> tuple[SlabPack, PackRates]:
