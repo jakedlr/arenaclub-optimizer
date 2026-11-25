@@ -77,7 +77,7 @@ def rank(
         list[str] | None,
         typer.Option(
             "--category",
-            help="Category to include, e.g. Pokemon (case-insensitive). "
+            help="Category to include, e.g. Pokemon; case and accents are ignored. "
             "Repeat for several. Default: config file, else all.",
         ),
     ] = None,
