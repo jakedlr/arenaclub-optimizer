@@ -263,6 +263,11 @@ def test_wide_table_at_80_columns_runs_past_the_edge_rather_than_truncate(arena)
     assert "…" not in stdout
     for cell in ["$100.00", "+43.7%", "+$43.73", "+59.7%", "+$59.60", "-$2.00"]:
         assert cell in stdout
+    # The last column, Coverage, is not cropped at the edge either.
+    assert "Coverage" in header_text(stdout)
+    rows = [line for line in stdout.splitlines() if line.startswith("Gold ")]
+    assert len(rows) == 2
+    assert all(row.rstrip().endswith(" 100%") for row in rows)
     # Pack names wrap between words, never inside one.
     for word in ["Gold", "Pokemon", "Football"]:
         assert word in stdout
