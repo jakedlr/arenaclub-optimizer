@@ -175,6 +175,7 @@ def test_json_document_has_a_stable_shape(arena):
     assert set(document) == {
         "version",
         "generated_at",
+        "settings",
         "summary",
         "results",
         "unrankable",
@@ -249,6 +250,109 @@ def test_json_slab_safe_ev_is_null_without_slab_safe(arena):
     football = rank_json()["results"][1]
 
     assert football["slab_safe_ev"] is None
+
+
+def test_json_settings_default_to_the_config_defaults(arena):
+    assert rank_json()["settings"] == {
+        "k": 1.0,
+        "payment_method": "wallet",
+        "tax_rate": 0.0,
+        "coverage_threshold": 0.95,
+        "p_profit_threshold": 0.25,
+        "top_heaviness_threshold": 0.5,
+        "filters": {
+            "categories": [],
+            "price_min": None,
+            "price_max": None,
+            "min_ev_pct": None,
+            "min_p_profit": None,
+            "exclude_high_variance": False,
+            "top": 10,
+        },
+    }
+
+
+def test_json_settings_show_the_effective_values_with_fractions(arena, config_dir):
+    write_config(
+        config_dir,
+        'payment_method = "ach"\ntax_rate = 0.07\ncoverage_threshold = 0.9\n'
+        "p_profit_threshold = 0.3\ntop_heaviness_threshold = 0.4\n"
+        "[filters]\nprice_min = 20\ntop = 4\n",
+    )
+
+    settings = rank_json(
+        "--k",
+        "0.8",
+        "--category",
+        "pokemon",
+        "--price-max",
+        "150",
+        "--min-ev",
+        "5",
+        "--min-p-profit",
+        "20",
+        "--exclude-high-variance",
+    )["settings"]
+
+    assert settings == {
+        "k": 0.8,
+        "payment_method": "ach",
+        "tax_rate": 0.07,
+        "coverage_threshold": 0.9,
+        "p_profit_threshold": 0.3,
+        "top_heaviness_threshold": 0.4,
+        "filters": {
+            "categories": ["pokemon"],
+            "price_min": 20.0,
+            "price_max": 150.0,
+            "min_ev_pct": pytest.approx(0.05),
+            "min_p_profit": pytest.approx(0.2),
+            "exclude_high_variance": True,
+            "top": 4,
+        },
+    }
+
+
+# --- data is never read as rich markup ----------------------------------------------
+
+MARKUP_OVERRIDES = """\
+[card_gp_base]
+market_value = 60
+
+[card_gf_1]
+market_value = 120
+"""
+
+
+def test_markup_in_arena_data_is_printed_literally(arena, config_dir):
+    # Gold Pokemon's Grail card is left unvalued, so the lower-bound note names
+    # its Tier; Gold Football has Buyback disabled, so it is skipped by name.
+    (config_dir / "overrides.toml").write_text(MARKUP_OVERRIDES, encoding="utf-8")
+    pokemon = arena.packs["gold-pokemon"]
+    pokemon["name"] = "Pokemon [Japanese] [/]"
+    pokemon["category"]["name"] = "Gold [/]"  # an unmatched close tag
+    pokemon["tiers"][0]["name"] = "[bold]Grail[/]"
+    football = arena.packs["gold-football"]
+    football["name"] = "Football [Japanese] [/]"
+    football["isOfferEnabled"] = False
+
+    result = runner.invoke(app, ["rank"], env={"COLUMNS": "400"})
+
+    assert result.exit_code == 0, result.stderr
+    assert result.exception is None
+    text = ANSI_ESCAPE.sub("", result.stdout)
+    for token in ["[bold]", "[Japanese]", "[/]", "[bold]Grail[/]"]:
+        assert token in text
+    assert "Skipped Gold Football [Japanese] [/]:" in text
+    assert "1 ranked, 1 unrankable (low Value Coverage), 1 skipped" in text
+
+
+def test_markup_in_arena_data_survives_json_output(arena):
+    arena.packs["gold-football"]["name"] = "Football [Japanese] [/]"
+
+    document = rank_json("--category", "football [japanese] [/]")
+
+    assert document["results"][0]["category"] == "Football [Japanese] [/]"
 
 
 # --- options and config -----------------------------------------------------------
