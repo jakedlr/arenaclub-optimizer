@@ -257,6 +257,27 @@ def test_notes_and_skipped_lines_wrap_instead_of_truncating(arena):
     assert "Skipped Gold Football:" in stdout
 
 
+def test_wide_table_at_80_columns_runs_past_the_edge_rather_than_truncate(arena):
+    stdout = invoke_at(NARROW, "--wide")
+
+    assert "…" not in stdout
+    for cell in ["$100.00", "+43.7%", "+$43.73", "+59.7%", "+$59.60", "-$2.00"]:
+        assert cell in stdout
+    # Pack names wrap between words, never inside one.
+    for word in ["Gold", "Pokemon", "Football"]:
+        assert word in stdout
+    # The lines after the table still wrap at the terminal's width.
+    assert_fits(stdout[stdout.index("Notes:") :], 80)
+
+
+def test_default_table_on_a_very_narrow_terminal_truncates_nothing(arena):
+    stdout = invoke_at({"COLUMNS": "50"})
+
+    assert "…" not in stdout
+    for cell in ["$100.00", "+43.7%", "+$43.73", "100.0%", "Pokemon", "Football"]:
+        assert cell in stdout
+
+
 def test_wide_option_leaves_json_unchanged(arena):
     narrow = rank_json()
     wide = rank_json("--wide")
