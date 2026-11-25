@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -125,12 +126,15 @@ class CardVolumeProvider:
         Unmatched when the index has no such card (or its page is a 404).
         NotFound when the card is known but has no usable figure at the grade,
         or the identity is ungraded (CardVolume prices graded cards only).
+        A promo matched without checking its year (see `match_card`) is
+        quoted at low confidence.
         Raises ProviderUnavailable on a 403, 429, 5xx, network failure or an
         unusable response.
         """
-        entry = match_card(self._index_cards(), identity)
-        if entry is None:
+        match = _match(self._index_cards(), identity)
+        if match is None:
             return Unmatched()
+        entry, unsure_match = match
         if identity.grader is None or identity.grade is None:
             return NotFound()
         card = self._card(entry["id"])
@@ -143,7 +147,7 @@ class CardVolumeProvider:
         if found is None:
             return NotFound()
         grade, uncertain = found
-        return self._grade_quote(card, grade, uncertain=uncertain)
+        return self._grade_quote(card, grade, uncertain=uncertain or unsure_match)
 
     def _grade_quote(self, card: Json, grade: Json, *, uncertain: bool) -> QuoteResult:
         """The quote for one `grades[]` entry. `uncertain` lowers a market
@@ -286,10 +290,19 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
     before an "EX"/"GX" suffix, leading zeros and a "/total" suffix are
     ignored. An identity whose set is just "Promo" (Arena Club's subset name
     for promos) matches any set with "promo" or "promos" in its name, but then
-    the year must agree too when both sides give one: promo numbers repeat
-    across eras. The language must agree, and an entry whose id isn't a safe
-    path is never matched.
+    the year must agree too when both sides give one, compared as numbers
+    even when the index gives it as text: promo numbers repeat across eras.
+    The language must agree, and an entry whose id isn't a safe path is never
+    matched.
     """
+    match = _match(cards, identity)
+    return None if match is None else match[0]
+
+
+def _match(cards: Iterable[Any], identity: CardIdentity) -> tuple[Json, bool] | None:
+    """`match_card`'s entry, and whether the match is unsure: a promo whose
+    year couldn't be checked, because either side gives none or the index
+    gives it as text rather than a number."""
     name = _text_key(identity.card_name)
     set_key = _text_key(identity.insert or identity.subset_name)
     number = _number_key(identity.set_number)
@@ -303,13 +316,15 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
         card_id = entry.get("id")
         if not (isinstance(card_id, str) and _CARD_ID.fullmatch(card_id)):
             continue
-        if (
+        if not (
             _text_key(entry.get("name")) == name
             and _number_key(entry.get("number")) == number
-            and _same_set(set_key, entry, identity.year)
             and str(entry.get("language") or "English").casefold().startswith(language)
         ):
-            matches.append(entry)
+            continue
+        same_set = _same_set(set_key, entry, identity.year)
+        if same_set is not None:
+            matches.append((entry, same_set is _SetMatch.UNSURE))
     if len(matches) > 1:
         logger.info(
             "CardVolume: %d index entries match %s, leaving it unmatched",
@@ -320,14 +335,37 @@ def match_card(cards: Iterable[Any], identity: CardIdentity) -> Json | None:
     return matches[0] if matches else None
 
 
-def _same_set(wanted: str, entry: Json, year: int | None) -> bool:
+class _SetMatch(Enum):
+    SURE = "sure"
+    # A promo set whose year couldn't be checked.
+    UNSURE = "unsure"
+
+
+def _same_set(wanted: str, entry: Json, year: int | None) -> _SetMatch | None:
+    """How `entry`'s set matches the wanted set key, or None if it doesn't."""
     offered = _text_key(entry.get("set"))
     if wanted != _PROMO:
-        return wanted == offered
+        return _SetMatch.SURE if wanted == offered else None
     if not _PROMO_WORDS.intersection(offered.split()):
-        return False
-    entry_year = entry.get("year")
-    return year is None or not isinstance(entry_year, int) or entry_year == year
+        return None
+    raw_year = entry.get("year")
+    entry_year = _year(raw_year)
+    if year is None or entry_year is None:
+        return _SetMatch.UNSURE
+    if entry_year != year:
+        return None
+    return _SetMatch.SURE if isinstance(raw_year, int) else _SetMatch.UNSURE
+
+
+def _year(value: object) -> int | None:
+    """An index year as a number: an int, or whole-number text; else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 def _text_key(value: object) -> str:
