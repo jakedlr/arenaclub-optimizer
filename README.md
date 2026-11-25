@@ -31,30 +31,39 @@ uv run arena watch --category pokemon --price-max 100
 `arena watch` runs the same ranking as `rank` every 10 minutes and sends Alerts to your Topic through ntfy. It takes `rank`'s filter options (`--category`, `--price-min`, `--price-max`, `--min-ev`, `--min-p-profit`, `--exclude-high-variance`, `--k`), plus:
 
 - `--interval MINUTES`: time between cycles, at least 5 (default: `watch.interval_minutes` in the config file, else 10). Each wait varies by up to 10% either way and is measured from the start of the last cycle, so a cycle that runs long is followed at once. Cycles never overlap.
-- `--once`: run one cycle and exit, with 0 if it went fine and 1 if it failed.
+- `--once`: run one cycle and exit, with 0 if it went fine, 2 if Arena Club blocked a request (as `rank` does) and 1 for any other failure.
 - `--quiet`: print a cycle's summary line only when the cycle fails.
 
 At start it prints your Topic and its subscribe URL. Each cycle then prints one line, for example `[2026-11-26 10:00 UTC] 2 ranked, 5 unrankable, 0 skipped; 1 alert sent`, where "ranked" counts every Slab Pack that meets the criteria.
 
-An Alert goes out when a Slab Pack newly meets your criteria, or when its Buyback EV % rises 5 percentage points above the value last alerted. A pack that stays in gets no repeat Alert. Every pack that meets the criteria counts, not only the top 10, so `watch` has no `--top`. Watch Mode also sends one Alert when requests to Arena Club start failing and one when they work again. What has been alerted is kept in `$XDG_STATE_HOME/arenaclub-optimizer/alerts.json`, so a restart doesn't repeat Alerts. A notification that can't be sent is logged and tried again on the next cycle.
+An Alert goes out when a Slab Pack newly meets your criteria, or when its Buyback EV % rises 5 percentage points above the value last alerted. A pack that stays in gets no repeat Alert. Every pack that meets the criteria counts, not only the top 10, so `watch` has no `--top`. A pack that briefly drops below 95% Value Coverage (say a replacement card has no value yet) or can't be fetched for a cycle keeps its place for up to 24 hours, so it isn't announced again when it comes back. One that falls below `--min-ev` or another criterion is a real change, and is announced again if it returns. Watch Mode also sends one Alert when its cycles start failing (see below) and one when they work again. What has been alerted is kept in `$XDG_STATE_HOME/arenaclub-optimizer/alerts.json`, so a restart doesn't repeat Alerts. A notification that can't be sent is logged and tried again on the next cycle, so now and then an Alert can arrive twice (for example if ntfy received it but the reply was lost). If ntfy is down for a whole outage, neither the failure Alert nor the recovery Alert arrives.
 
 When a cycle fails, Watch Mode backs off instead of waiting the interval. Failure means Arena Club blocked a request (HTTP 403 or 429), another request failed, more than half the Slab Packs couldn't be fetched, or the value cache couldn't be used. The first failure waits one interval, and each further failure doubles the wait, up to 2 hours. If Arena Club's Retry-After asks for longer, Watch Mode waits that long instead. A successful cycle resets the back-off. Each cycle opens a new connection to Arena Club and new value sources, and closes them at its end. The caches are on disk, so they carry over between cycles.
 
-Ctrl+C (or SIGTERM) abandons the cycle in progress, saves the Alert state and exits 0. Watch Mode reads the config and overrides files once at start, so restart it after you change them.
+Ctrl+C (or SIGTERM) abandons the cycle in progress, saves the Alert state and exits 0; a second Ctrl+C during that save is ignored. Log lines, like the summary lines, are stamped in UTC. Watch Mode reads the config and overrides files once at start, so restart it after you change them.
 
 ### Running it in the background (Linux and WSL)
 
-With `nohup`, from the repo directory:
+Watch Mode's output starts with your Topic, so wherever it goes (a log file, the systemd journal) has to stay private: anyone who can read it can subscribe to your Alerts.
+
+With `nohup`, from the repo directory. The subshell's `umask 077` makes the directory and log readable by you only, and the `chmod`s fix ones left by an earlier run:
 
 ```sh
-mkdir -p ~/.local/state/arenaclub-optimizer
-nohup uv run arena watch --quiet --category pokemon --price-max 100 \
-  >> ~/.local/state/arenaclub-optimizer/watch.log 2>&1 &
+(
+  umask 077
+  dir=~/.local/state/arenaclub-optimizer
+  mkdir -p "$dir" && chmod 700 "$dir"
+  touch "$dir/watch.log" && chmod 600 "$dir/watch.log"
+  nohup uv run arena watch --quiet --category pokemon --price-max 100 \
+    >> "$dir/watch.log" 2>&1 &
+)
 ```
 
-Stop it with `pkill -f "arena watch"` (SIGTERM, so it saves its state). The log starts with your Topic, so keep it private. On WSL, Windows may stop the Linux distribution once no WSL terminal is open, which stops Watch Mode too. Keep a WSL window open while it runs.
+Stop it with `pkill -f 'bin/arena watch'`. That sends SIGTERM to the Watch Mode process itself, which saves its state and exits. The pattern is narrow on purpose: a looser one such as `"arena watch"` also matches any shell, editor or script whose command line mentions it.
 
-With systemd, run it as a user service: [`docs/arena-watch.service`](docs/arena-watch.service) is an example unit, with instructions for installing it and turning systemd on in WSL. Follow its output with `journalctl --user -u arena-watch -f`.
+With systemd, run it as a user service: [`docs/arena-watch.service`](docs/arena-watch.service) is an example unit, with instructions for installing it and turning systemd on in WSL. Follow its output with `journalctl --user -u arena-watch -f`. The journal keeps the startup lines with your Topic; your own user, root and members of the `systemd-journal` and `adm` groups can read it.
+
+On WSL, Windows may stop the Linux distribution once no WSL terminal is open, and that stops Watch Mode either way, under `nohup` or systemd (even with linger turned on). Keep a WSL window open while it runs.
 
 ## Values
 

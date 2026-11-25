@@ -12,6 +12,8 @@
 #
 # On WSL, systemd must be enabled first: add "[boot]" and "systemd=true" to
 # /etc/wsl.conf, then run "wsl --shutdown" from Windows and reopen WSL.
+# Windows may still stop the distribution once no WSL terminal is open, even
+# with linger on, and that stops this service too: keep a WSL window open.
 #
 # The journal keeps the startup lines, which show your Topic; anyone who
 # knows the Topic can read your Alerts.
@@ -22,8 +24,10 @@ Description=arenaclub-optimizer Watch Mode
 [Service]
 Type=simple
 WorkingDirectory=%h/arenaclub-optimizer
-ExecStart=%h/.local/bin/uv run arena watch --quiet --category pokemon --price-max 100
-# systemd stops it with SIGTERM: watch then saves its Alert state and exits 0.
+# --frozen: run from uv.lock as it is, never re-resolving at start.
+ExecStart=%h/.local/bin/uv run --frozen arena watch --quiet --category pokemon --price-max 100
+# systemd stops it with SIGTERM: watch then saves its Alert state and exits 0
+# (a second signal during that save is ignored).
 TimeoutStopSec=30
 # Watch Mode backs off by itself on failed cycles; this only covers a crash
 # or a bad config, so it doesn't restart in a tight loop.
