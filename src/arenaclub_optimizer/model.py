@@ -43,6 +43,80 @@ class ValueConfidence(StrEnum):
     LOW = "low"
 
 
+class Language(StrEnum):
+    """A card's printing language, as value providers distinguish it."""
+
+    ENGLISH = "english"
+    JAPANESE = "japanese"
+
+
+_IDENTITY_TEXT_FIELDS = (
+    "set_name",
+    "insert",
+    "subset_name",
+    "parallel_name",
+    "card_name",
+    "set_number",
+    "grader",
+    "grade",
+    "cert_number",
+)
+
+
+@dataclass(frozen=True)
+class CardIdentity:
+    """What identifies a graded card to a value provider: which card, which
+    printing, and which grading company and grade.
+
+    Text is stripped, with runs of whitespace collapsed, and an empty value
+    becomes None. `grader` keeps Arena Club's spelling (e.g. "psa",
+    "arena_club") and `grade` is text such as "10" or "9.5". A grade of None
+    means ungraded (raw). `year` may be given as digits; `language` as a
+    Language or its name in any case.
+
+    Raises ValueError for a year that isn't a whole number, or an unknown
+    language.
+    """
+
+    year: int | None = None
+    set_name: str | None = None
+    insert: str | None = None
+    subset_name: str | None = None
+    parallel_name: str | None = None
+    card_name: str | None = None
+    set_number: str | None = None
+    language: Language = Language.ENGLISH
+    grader: str | None = None
+    grade: str | None = None
+    cert_number: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in _IDENTITY_TEXT_FIELDS:
+            object.__setattr__(self, name, _clean_text(getattr(self, name)))
+        object.__setattr__(self, "year", _clean_year(self.year))
+        try:
+            language = Language(str(self.language).strip().casefold())
+        except ValueError:
+            raise ValueError(f"unknown language: {self.language!r}") from None
+        object.__setattr__(self, "language", language)
+
+
+def _clean_text(value: object) -> str | None:
+    if value is None:
+        return None
+    return " ".join(str(value).split()) or None
+
+
+def _clean_year(value: object) -> int | None:
+    if isinstance(value, str):
+        value = value.strip() or None
+        if value is not None and value.isascii() and value.isdigit():
+            return int(value)
+    if value is None or (isinstance(value, int) and not isinstance(value, bool)):
+        return value
+    raise ValueError(f"year must be a whole number, got {value!r}")
+
+
 @dataclass(frozen=True)
 class ChecklistCard:
     """One card on a Slab Pack's Checklist.
@@ -50,6 +124,8 @@ class ChecklistCard:
     `hit_rate` is a probability from 0 to 1, not a percentage. `market_value` is
     in dollars, or None when no Market Value is known. `cert_number` is the
     grading company's cert number, when known; Manual Overrides can key on it.
+    `identity` is what value providers look the card up by. When it is left
+    out, it is built from `grader`, `grade` and `cert_number` alone.
 
     Raises ValueError if `market_value` is NaN, infinite or negative.
     """
@@ -64,8 +140,15 @@ class ChecklistCard:
     market_value: float | None
     value_confidence: ValueConfidence | None
     cert_number: str | None = None
+    # None only as the "left out" default; __post_init__ always sets it.
+    identity: CardIdentity = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.identity is None:
+            identity = CardIdentity(
+                grader=self.grader, grade=self.grade, cert_number=self.cert_number
+            )
+            object.__setattr__(self, "identity", identity)
         value = self.market_value
         if value is not None and not (math.isfinite(value) and value >= 0):
             raise ValueError(

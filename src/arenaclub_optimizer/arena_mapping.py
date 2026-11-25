@@ -13,7 +13,9 @@ from typing import Any, NamedTuple
 from arenaclub_optimizer._pulls import DEFAULT_BUYBACK_RATE
 from arenaclub_optimizer.ev import DEFAULT_SLAB_SAFE_FLOOR
 from arenaclub_optimizer.model import (
+    CardIdentity,
     ChecklistCard,
+    Language,
     SlabPack,
     TierType,
     percent_to_probability,
@@ -26,6 +28,7 @@ __all__ = [
     "ArenaMappingError",
     "PackRates",
     "build_label",
+    "card_identity",
     "is_card_product",
     "map_slab_pack",
     "pack_rates",
@@ -36,6 +39,8 @@ ACTIVE_STATUS = "active"
 BASE_NAME = "Base"
 # `gradingCompany` for cards Arena Club graded itself.
 ARENA_CLUB_GRADER = "arena_club"
+# Arena Club has no language field; Japanese cards carry this word in `setName`.
+JAPANESE_MARKER = "jpn"
 
 # How grading companies read in a label. Others fall back to `_display_grader`.
 _GRADER_NAMES = {
@@ -153,6 +158,33 @@ def build_label(card_json: Json) -> str:
     return label or _text(card_json.get("id"))
 
 
+def card_identity(card_json: Json) -> CardIdentity:
+    """The CardIdentity of a `/v3/items` or `/v4/items` card.
+
+    Reads `year, setName, insert, subsetName, parallelName, playerName`
+    (the card name), `setNumber, gradingCompany, overall` (the grade) and
+    `cardCertNumber`, as Arena Club gives them. The card is Japanese when
+    `setName` contains the word "JPN" in any case, since Arena Club has no
+    language field (docs/research/arenaclub-api.md), and English otherwise.
+    A year that isn't a whole number is left out.
+    """
+    set_name = _text(card_json.get("setName"))
+    japanese = JAPANESE_MARKER in set_name.casefold().split()
+    return CardIdentity(
+        year=_year(card_json.get("year")),
+        set_name=set_name,
+        insert=_text(card_json.get("insert")),
+        subset_name=_text(card_json.get("subsetName")),
+        parallel_name=_text(card_json.get("parallelName")),
+        card_name=_text(card_json.get("playerName")),
+        set_number=_text(card_json.get("setNumber")),
+        language=Language.JAPANESE if japanese else Language.ENGLISH,
+        grader=_text(card_json.get("gradingCompany")),
+        grade=_grade(card_json.get("overall")),
+        cert_number=_text(card_json.get("cardCertNumber")),
+    )
+
+
 def _map_tier(
     pack_id: str, tier: Json, cards_json: Mapping[str, Json]
 ) -> list[ChecklistCard]:
@@ -194,6 +226,7 @@ def _map_card(
         market_value=None,
         value_confidence=None,
         cert_number=_text(card_json.get("cardCertNumber")) or None,
+        identity=card_identity(card_json),
     )
 
 
@@ -215,6 +248,14 @@ def _text(value: object) -> str:
     if value is None:
         return ""
     return " ".join(str(value).split())
+
+
+def _year(value: object) -> int | None:
+    """`value` as a year, or None when it isn't a whole number."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    text = _text(value)
+    return int(text) if text.isascii() and text.isdigit() else None
 
 
 def _not_base(value: object) -> str:
