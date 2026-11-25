@@ -120,13 +120,6 @@ def test_version_prints_package_version():
     assert result.stdout == version("arenaclub-optimizer") + "\n"
 
 
-def test_watch_is_still_a_stub():
-    result = runner.invoke(app, ["watch"])
-
-    assert result.exit_code != 0
-    assert result.stderr == "arena watch: not implemented yet\n"
-
-
 def test_the_default_client_is_the_real_arena_client():
     assert cli.make_client is ArenaClient
 

@@ -28,7 +28,7 @@ from arenaclub_optimizer.config import state_dir
 from arenaclub_optimizer.ev import EVResult
 from arenaclub_optimizer.fetch import FetchResult
 from arenaclub_optimizer.model import NormalizationStatus, SkippedPack, SlabPack
-from arenaclub_optimizer.ranking import RankedPack, RankingReport
+from arenaclub_optimizer.ranking import RankedPack, RankingReport, UnrankablePack
 from arenaclub_optimizer.risk import RiskResult
 
 T0 = datetime(2026, 11, 26, 10, 0, tzinfo=UTC)
@@ -171,6 +171,30 @@ def test_a_pack_still_in_the_results_is_not_alerted_again():
     # The last alerted value and time stay those of the first Alert; only
     # last_seen_at moves.
     assert state.packs["gp"] == AlertedPack(0.042, T0, last_seen_at=T1)
+
+
+def cut(top: int, *results: RankedPack) -> RankingReport:
+    """A report whose Top Results are cut to `top`, as `rank` cuts them,
+    with every pack that met the criteria in `matching`."""
+    ordered = tuple(sorted(results, key=lambda r: -r.ev.buyback_ev_pct))
+    return RankingReport(ordered[:top], (), (), T0, NO_VALUES, matching=ordered)
+
+
+def test_a_pack_crossing_the_top_n_edge_is_not_alerted_again():
+    # "edge" is 2nd, then 3rd (cut by --top 2), then 2nd again; it met the
+    # criteria all along, so it is Entered once.
+    cycles, state = run(
+        cut(2, ranked("a", 0.30), ranked("edge", 0.10), ranked("c", 0.08)),
+        cut(2, ranked("a", 0.30), ranked("c", 0.12), ranked("edge", 0.10)),
+        cut(2, ranked("a", 0.30), ranked("edge", 0.10), ranked("c", 0.08)),
+    )
+
+    assert [[a.result.pack.pack_id for a in c] for c in cycles] == [
+        ["a", "edge", "c"],
+        [],
+        [],
+    ]
+    assert state.packs["edge"] == AlertedPack(0.10, T0, last_seen_at=T2)
 
 
 def test_an_empty_report_sends_nothing():
@@ -345,6 +369,51 @@ def test_a_pack_seen_in_the_results_restarts_the_stale_clock():
     _, state = detect(state, skipped_report(), now=later + timedelta(hours=20))
 
     assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=later)
+
+
+def unrankable_report(pack_id: str = "gp", coverage: float = 0.94) -> RankingReport:
+    """A report in which `pack_id` fell below the Value Coverage threshold."""
+    pack = SlabPack(pack_id, "Gold", "Pokémon", 100.0, True, ())
+    return RankingReport((), (UnrankablePack(pack, coverage),), (), T0, NO_VALUES)
+
+
+def test_a_pack_whose_coverage_flaps_is_entered_once():
+    # The reviewer's probe: a replacement card with no value yet pushes the
+    # pack under 95% Value Coverage, then it is valued and the pack returns.
+    cycles, _ = run(
+        report(ranked("gp", 0.10)),
+        unrankable_report(),
+        report(ranked("gp", 0.10)),
+        unrankable_report(),
+        report(ranked("gp", 0.10)),
+    )
+
+    assert [len(c) for c in cycles] == [1, 0, 0, 0, 0]
+
+
+def test_an_unrankable_pack_keeps_its_entry_without_refreshing_last_seen_at():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+
+    _, state = detect(state, unrankable_report(), now=T0 + timedelta(hours=1))
+
+    assert state.packs["gp"] == AlertedPack(0.10, T0, last_seen_at=T0)
+
+
+def test_a_pack_unrankable_for_longer_than_stale_after_is_dropped():
+    state = AlertState(packs={"gp": AlertedPack(0.10, T0)})
+    later = T0 + DEFAULT_STALE_AFTER + timedelta(minutes=1)
+
+    _, state = detect(state, unrankable_report(), now=later)
+
+    assert state.packs == {}
+
+
+def test_a_pack_that_fails_a_metric_filter_is_still_dropped():
+    # Leaving because of --min-ev and the like is a real change, unlike a
+    # dip in Value Coverage: the pack is Entered again when it returns.
+    cycles, _ = run(report(ranked("gp", 0.10)), report(), report(ranked("gp", 0.10)))
+
+    assert [len(c) for c in cycles] == [1, 0, 1]
 
 
 def test_stale_after_is_configurable():
@@ -536,6 +605,34 @@ def test_the_degraded_alert_gives_the_counts():
 
     assert alert is not None
     assert "7 of 10 Slab Packs" in alert.message
+
+
+def test_the_value_cache_alert_names_the_local_problem():
+    outcome = HealthOutcome.value_cache("database is locked")
+
+    alert, state = detect_health(AlertState(), outcome)
+
+    assert outcome.kind is HealthKind.VALUE_CACHE
+    assert alert is not None
+    assert alert.title == "Watch Mode can't use its value cache"
+    assert alert.priority is Priority.HIGH
+    assert "database is locked" in alert.message
+    assert state.health is HealthKind.VALUE_CACHE
+
+
+def test_the_value_cache_health_round_trips_through_the_file(tmp_path):
+    save_state(AlertState(health=HealthKind.VALUE_CACHE), tmp_path)
+
+    assert load_state(tmp_path).health is HealthKind.VALUE_CACHE
+
+
+def test_the_recovery_alert_does_not_blame_arena_club_alone():
+    _, state = detect_health(AlertState(), HealthOutcome.value_cache("disk full"))
+
+    alert, _ = detect_health(state, HealthOutcome.ok())
+
+    assert alert is not None
+    assert "Arena Club" not in alert.message
 
 
 def test_a_long_error_is_cut_to_fit_the_message_limit():

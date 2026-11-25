@@ -69,13 +69,24 @@ class UnrankablePack:
 @dataclass(frozen=True)
 class RankingReport:
     """The Top Results, best first, plus the packs left out and why, and the
-    value resolution the packs were ranked with."""
+    value resolution the packs were ranked with.
+
+    `results` is cut to the top N, for display. `matching` is every Slab
+    Pack that met the criteria, best first, before that cut: Watch Mode
+    alerts on it, so a pack moving across the cut isn't Entered again. It
+    defaults to `results`.
+    """
 
     results: tuple[RankedPack, ...]
     unrankable: tuple[UnrankablePack, ...]
     skipped: tuple[SkippedPack, ...]
     generated_at: datetime
     values: ValueResolution
+    matching: tuple[RankedPack, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.matching:
+            object.__setattr__(self, "matching", self.results)
 
 
 def pack_name(pack: SlabPack) -> str:
@@ -100,9 +111,10 @@ def rank(
     inactive (sold-out) packs. A pack with Buyback disabled, or whose Hit Rates
     are rejected or unusable, goes under `skipped`; one below Value Coverage
     goes under `unrankable`. The rest are filtered on EV %, P(profit) and the
-    High-variance Note, sorted by Buyback EV % descending, and cut to the top
-    N. `skipped` carries packs already skipped upstream (e.g. while fetching)
-    into the report, ahead of the ones skipped here. `generated_at` defaults
+    High-variance Note and sorted by Buyback EV % descending: that list is
+    `matching`, and `results` is its top N. `skipped` carries packs already
+    skipped upstream (e.g. while fetching) into the report, ahead of the ones
+    skipped here. `generated_at` defaults
     to now, in UTC.
     """
     filters = config.filters
@@ -154,6 +166,7 @@ def rank(
         skipped=tuple(skips),
         generated_at=generated_at or datetime.now(UTC),
         values=values,
+        matching=tuple(results),
     )
 
 

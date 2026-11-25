@@ -22,8 +22,11 @@ Decisions from the planning session on 2026-11-24. Vocabulary is defined in `GLO
 - **Watch Mode:**
   - runs locally; default interval 10 min, minimum 5, with jitter
   - sends an Alert only when a Slab Pack newly meets the criteria or its EV % moves past a threshold, deduped using local state
+  - "meets the criteria" means passing the filters, before the top-N cut, so a pack moving across the cut isn't alerted again; `watch` has no `--top` (issue #38)
+  - a failed cycle backs off: from the interval, doubling to 2 hours, or Retry-After if longer; reset by a successful cycle
   - ntfy: a random 24-character Topic generated on first run and saved in the local state directory (`$XDG_STATE_HOME/arenaclub-optimizer/topic`, never the user's config file; `watch.topic` in config overrides it); `arena topic` prints `https://ntfy.sh/<topic>` and `--test` sends a test notification; the server is configurable
-  - sends one Alert when requests start failing
+  - a pack that drops below Value Coverage, or is skipped, keeps its entry for up to 24 h, so a brief dip does not re-alert; leaving through the EV %, P(profit) or High-variance filters drops it (PR #42 review)
+  - sends one Alert when cycles start failing (Arena Club blocking or failing, a degraded fetch, or an unusable value cache), and one when they recover
 - **Stack:** Python 3.14, uv, pytest, ruff, httpx, typer, rich.
 - Secrets and local state (`.env`, config, cache) are gitignored and never committed. The repo is public.
 
