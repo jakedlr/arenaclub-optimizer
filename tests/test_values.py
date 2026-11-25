@@ -1,12 +1,15 @@
 """ValueQuote, ValueCache and CreditBudget."""
 
+import ast
 import dataclasses
 import math
 from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from fake_values import NOW, TODAY, quote
 
+from arenaclub_optimizer import values
 from arenaclub_optimizer.model import ValueConfidence
 from arenaclub_optimizer.values import (
     DEFAULT_DAILY_LIMITS,
@@ -410,3 +413,22 @@ def test_budgets_sharing_a_file_see_each_others_spending(tmp_path):
         other = CreditBudget(second, {"pokeprice": 3})
         assert other.remaining("pokeprice", now=NOW) == 1
         assert not other.try_spend("pokeprice", 2, now=NOW)
+
+
+# --- no HTTP -----------------------------------------------------------------
+
+NETWORK_MODULES = {"httpx", "urllib", "http", "socket", "requests"}
+
+
+def test_the_values_package_imports_no_network_module():
+    package = Path(values.__file__).parent
+    for path in package.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            for name in names:
+                assert name.split(".")[0] not in NETWORK_MODULES, f"{path}: {name}"
