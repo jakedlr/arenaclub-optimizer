@@ -43,6 +43,85 @@ class ValueConfidence(StrEnum):
     LOW = "low"
 
 
+class Language(StrEnum):
+    """A card's printing language, as value providers distinguish it."""
+
+    ENGLISH = "english"
+    JAPANESE = "japanese"
+
+
+_IDENTITY_TEXT_FIELDS = (
+    "set_name",
+    "insert",
+    "subset_name",
+    "parallel_name",
+    "card_name",
+    "set_number",
+    "grader",
+    "grade",
+    "cert_number",
+)
+
+
+@dataclass(frozen=True)
+class CardIdentity:
+    """What identifies a graded card to a value provider: which card, which
+    printing, and which grading company and grade.
+
+    Text is stripped, with runs of whitespace collapsed, and an empty value
+    becomes None. `grader` keeps Arena Club's spelling (e.g. "psa",
+    "arena_club") and `grade` is text such as "10" or "9.5". A grade of None
+    means ungraded (raw). `year` may be given as digits; `language` as a
+    Language or its name in any case.
+
+    Raises ValueError for a year that isn't a whole number, or an unknown
+    language.
+    """
+
+    year: int | None = None
+    set_name: str | None = None
+    insert: str | None = None
+    subset_name: str | None = None
+    parallel_name: str | None = None
+    card_name: str | None = None
+    set_number: str | None = None
+    language: Language = Language.ENGLISH
+    grader: str | None = None
+    grade: str | None = None
+    cert_number: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in _IDENTITY_TEXT_FIELDS:
+            object.__setattr__(self, name, _clean_text(getattr(self, name)))
+        object.__setattr__(self, "year", _clean_year(self.year))
+        try:
+            language = Language(str(self.language).strip().casefold())
+        except ValueError:
+            raise ValueError(f"unknown language: {self.language!r}") from None
+        object.__setattr__(self, "language", language)
+
+
+def _clean_text(value: object) -> str | None:
+    if value is None:
+        return None
+    return " ".join(str(value).split()) or None
+
+
+def _clean_year(value: object) -> int | None:
+    if isinstance(value, str):
+        value = value.strip() or None
+        if value is not None and value.isascii() and value.isdigit():
+            return int(value)
+    if value is None or (isinstance(value, int) and not isinstance(value, bool)):
+        return value
+    raise ValueError(f"year must be a whole number, got {value!r}")
+
+
+# The default for ChecklistCard.identity, compared with `is`, so an explicitly
+# passed empty CardIdentity still counts as given.
+_DERIVED_IDENTITY = CardIdentity()
+
+
 @dataclass(frozen=True)
 class ChecklistCard:
     """One card on a Slab Pack's Checklist.
@@ -50,8 +129,15 @@ class ChecklistCard:
     `hit_rate` is a probability from 0 to 1, not a percentage. `market_value` is
     in dollars, or None when no Market Value is known. `cert_number` is the
     grading company's cert number, when known; Manual Overrides can key on it.
+    `identity` is what value providers look the card up by. When it is left
+    out, it is built from `grader`, `grade` and `cert_number` alone. When it
+    is given, its grader (ignoring case), grade and cert number must agree
+    with the card's, so changing one of those with `dataclasses.replace`
+    needs a matching identity too.
 
-    Raises ValueError if `market_value` is NaN, infinite or negative.
+    Raises ValueError if `market_value` is NaN, infinite or negative, or if
+    `identity` disagrees with the card; TypeError if `identity` isn't a
+    CardIdentity.
     """
 
     card_id: str
@@ -64,12 +150,39 @@ class ChecklistCard:
     market_value: float | None
     value_confidence: ValueConfidence | None
     cert_number: str | None = None
+    # `_DERIVED_IDENTITY` marks "left out"; __post_init__ replaces it.
+    identity: CardIdentity = _DERIVED_IDENTITY
 
     def __post_init__(self) -> None:
+        if self.identity is _DERIVED_IDENTITY:
+            identity = CardIdentity(
+                grader=self.grader, grade=self.grade, cert_number=self.cert_number
+            )
+            object.__setattr__(self, "identity", identity)
+        else:
+            self._check_identity()
         value = self.market_value
         if value is not None and not (math.isfinite(value) and value >= 0):
             raise ValueError(
                 f"card {self.card_id!r} has an invalid Market Value: {value!r}"
+            )
+
+    def _check_identity(self) -> None:
+        identity = self.identity
+        if not isinstance(identity, CardIdentity):
+            raise TypeError(
+                f"card {self.card_id!r}: identity must be a CardIdentity, "
+                f"got {identity!r}"
+            )
+        grader = _clean_text(self.grader)
+        own = (grader and grader.casefold(), _clean_text(self.grade))
+        own += (_clean_text(self.cert_number),)
+        theirs = (identity.grader and identity.grader.casefold(), identity.grade)
+        theirs += (identity.cert_number,)
+        if own != theirs:
+            raise ValueError(
+                f"card {self.card_id!r}: identity grader, grade and cert "
+                f"{theirs!r} disagree with the card's {own!r}"
             )
 
 

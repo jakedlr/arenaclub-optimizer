@@ -6,7 +6,9 @@ import pytest
 
 from arenaclub_optimizer import model
 from arenaclub_optimizer.model import (
+    CardIdentity,
     ChecklistCard,
+    Language,
     NormalizationStatus,
     SlabPack,
     TierType,
@@ -289,3 +291,149 @@ def test_percent_to_probability_examples(text, expected):
 def test_percent_to_probability_rejects_malformed_input(text):
     with pytest.raises(ValueError):
         percent_to_probability(text)
+
+
+# --- CardIdentity ------------------------------------------------------------
+
+
+def test_card_identity_holds_its_fields():
+    identity = CardIdentity(
+        year=2021,
+        set_name="2021 Pokemon SWSH",
+        insert="Evolving Skies",
+        subset_name="Evolving Skies",
+        parallel_name="Base",
+        card_name="Umbreon VMAX",
+        set_number="215",
+        language=Language.ENGLISH,
+        grader="psa",
+        grade="10",
+        cert_number="12345678",
+    )
+    assert identity.year == 2021
+    assert identity.set_name == "2021 Pokemon SWSH"
+    assert identity.insert == "Evolving Skies"
+    assert identity.subset_name == "Evolving Skies"
+    assert identity.parallel_name == "Base"
+    assert identity.card_name == "Umbreon VMAX"
+    assert identity.set_number == "215"
+    assert identity.language is Language.ENGLISH
+    assert identity.grader == "psa"
+    assert identity.grade == "10"
+    assert identity.cert_number == "12345678"
+
+
+def test_card_identity_defaults_to_empty_and_english():
+    identity = CardIdentity()
+    assert identity.year is None
+    assert identity.card_name is None
+    assert identity.grade is None
+    assert identity.language is Language.ENGLISH
+
+
+def test_language_values():
+    assert {lang.value for lang in Language} == {"english", "japanese"}
+
+
+def test_card_identity_strips_strings():
+    identity = CardIdentity(
+        set_name="2019 Pokemon S&M ", card_name="  Greninja/Zoroark GX", grade=" 10 "
+    )
+    assert identity.set_name == "2019 Pokemon S&M"
+    assert identity.card_name == "Greninja/Zoroark GX"
+    assert identity.grade == "10"
+
+
+@pytest.mark.parametrize("empty", ["", "   ", None])
+def test_card_identity_turns_empty_values_into_none(empty):
+    identity = CardIdentity(
+        set_name=empty,
+        insert=empty,
+        subset_name=empty,
+        parallel_name=empty,
+        card_name=empty,
+        set_number=empty,
+        grader=empty,
+        grade=empty,
+        cert_number=empty,
+        year=empty,
+    )
+    assert identity == CardIdentity()
+
+
+def test_card_identity_accepts_a_year_as_digits():
+    assert CardIdentity(year=" 2003 ").year == 2003
+
+
+@pytest.mark.parametrize("year", ["two thousand", True, 20.5])
+def test_card_identity_rejects_a_bad_year(year):
+    with pytest.raises(ValueError, match="year"):
+        CardIdentity(year=year)
+
+
+def test_card_identity_accepts_a_language_name():
+    assert CardIdentity(language="Japanese").language is Language.JAPANESE
+    with pytest.raises(ValueError, match="language"):
+        CardIdentity(language="klingon")
+
+
+def test_card_identity_is_immutable():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        CardIdentity().card_name = "x"  # type: ignore[misc]
+
+
+def test_checklist_card_identity_defaults_from_its_grade_fields():
+    card = make_card("a", 1.0, grader="psa", grade="9", cert_number="777")
+    assert card.identity == CardIdentity(grader="psa", grade="9", cert_number="777")
+
+
+def test_checklist_card_keeps_an_explicit_identity():
+    identity = CardIdentity(card_name="Umbreon", grader="psa", grade="10")
+    assert make_card("a", 1.0, identity=identity).identity is identity
+
+
+def test_checklist_card_identity_survives_replace():
+    identity = CardIdentity(card_name="Umbreon", grader="PSA", grade="10")
+    card = dataclasses.replace(make_card("a", 1.0, identity=identity), hit_rate=0.5)
+    assert card.identity is identity
+
+
+def test_checklist_card_grader_is_compared_case_insensitively():
+    identity = CardIdentity(grader="psa", grade="10")
+    assert make_card("a", 1.0, grader="PSA", identity=identity).identity is identity
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"grader": "bgs"},
+        {"grade": "9"},
+        {"cert_number": "999"},
+    ],
+)
+def test_checklist_card_rejects_an_identity_that_disagrees(fields):
+    identity = CardIdentity(grader="PSA", grade="10", cert_number="123")
+    with pytest.raises(ValueError, match="identity"):
+        make_card("a", 1.0, identity=identity, **{"cert_number": "123", **fields})
+
+
+def test_checklist_card_rejects_an_identity_missing_its_grade_fields():
+    with pytest.raises(ValueError, match="identity"):
+        make_card("a", 1.0, identity=CardIdentity(card_name="Umbreon"))
+
+
+def test_replacing_a_grade_field_needs_a_matching_identity():
+    card = make_card("a", 1.0, grader="psa", grade="10")
+    with pytest.raises(ValueError, match="identity"):
+        dataclasses.replace(card, grader="bgs")
+
+    regraded = dataclasses.replace(
+        card, grader="bgs", identity=dataclasses.replace(card.identity, grader="bgs")
+    )
+    assert regraded.identity.grader == "bgs"
+
+
+@pytest.mark.parametrize("identity", [None, "psa 10"])
+def test_checklist_card_identity_must_be_a_card_identity(identity):
+    with pytest.raises(TypeError, match="identity"):
+        make_card("a", 1.0, identity=identity)

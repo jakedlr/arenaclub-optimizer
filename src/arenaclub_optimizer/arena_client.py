@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import tempfile
 import time
@@ -22,6 +21,8 @@ from types import TracebackType
 from typing import Any, Self
 
 import httpx
+
+from arenaclub_optimizer.config import cache_dir
 
 BASE_URL = "https://api.arenaclub.com"
 REPO_URL = "https://github.com/jakedlr/arenaclub-optimizer"
@@ -61,9 +62,7 @@ def default_cache_dir() -> Path:
 
     Per the XDG spec, an unset, empty or relative ``XDG_CACHE_HOME`` is ignored.
     """
-    xdg = os.environ.get("XDG_CACHE_HOME", "")
-    base = Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".cache"
-    return base / "arenaclub-optimizer" / "cards"
+    return cache_dir() / "cards"
 
 
 class ArenaClient:
