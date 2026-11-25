@@ -9,6 +9,13 @@ def _isolated_cache_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_state_home(tmp_path_factory, monkeypatch):
+    """Point XDG_STATE_HOME at a temp dir, so no test can touch
+    ~/.local/state (Alert state, the Topic)."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path_factory.mktemp("xdg-state")))
+
+
+@pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     """Fail any request that would leave the process: tests use
     httpx.MockTransport or fakes, never the real services. Also hide a real
