@@ -243,14 +243,7 @@ class PokePriceProvider:
         if set_query is None or search is None:
             return None
         language = identity.language.value
-        card_key = "card:" + "|".join(
-            (
-                language,
-                _normalise(set_query),
-                _number_key(identity.set_number) or "",
-                _normalise(identity.card_name or ""),
-            )
-        )
+        card_key = _card_key(identity, set_query)
         cached = self._cache.get_provider_id(NAME, card_key)
         if cached is not None:
             return cached
@@ -263,7 +256,8 @@ class PokePriceProvider:
             "language": language,
             "limit": str(CARD_SEARCH_LIMIT),
         }
-        body = self._get("/cards", params, cost=CARD_SEARCH_COST)
+        cost = cards_cost(CARD_SEARCH_LIMIT, ebay=False)
+        body = self._get("/cards", params, cost=cost)
         found = _match_card(_records(body), identity)
         if found is not None:
             self._cache.put_provider_id(NAME, card_key, found)
@@ -295,7 +289,7 @@ class PokePriceProvider:
         params = {"language": language, "limit": "1"}
         if ebay:
             params["includeEbay"] = "true"
-        cost = PRICED_LOOKUP_COST if ebay else RAW_LOOKUP_COST
+        cost = cards_cost(1, ebay=ebay)
         body = self._get(f"/cards/{tcg_player_id}", params, cost=cost, missing_ok=True)
         records = _records(body) if body is not None else []
         return records[0] if records else None
@@ -319,9 +313,7 @@ class PokePriceProvider:
         return ValueQuote(
             market_value=float(price),
             source=NAME,
-            as_of=_date(stats.get("lastMarketUpdate"))
-            or _date(ebay.get("updatedAt"))
-            or self._budget.now().date(),
+            as_of=self._as_of(stats.get("lastMarketUpdate"), ebay.get("updatedAt")),
             sales_count=sales,
             confidence=ValueConfidence.HIGH if high else ValueConfidence.LOW,
         )
@@ -334,10 +326,18 @@ class PokePriceProvider:
         return ValueQuote(
             market_value=float(market),
             source=NAME,
-            as_of=_date(prices.get("lastUpdated")) or self._budget.now().date(),
+            as_of=self._as_of(prices.get("lastUpdated")),
             sales_count=None,
             confidence=ValueConfidence.LOW,
         )
+
+    def _as_of(self, *stamps: object) -> date:
+        """The date of the first usable time stamp, else today."""
+        for stamp in stamps:
+            when = _date(stamp)
+            if when is not None:
+                return when
+        return self._budget.now().date()
 
     # --- HTTP ----------------------------------------------------------------
 
@@ -423,6 +423,18 @@ def _set_query(identity: CardIdentity) -> str | None:
         words = words[1:]
     kept = [w for w in words if _normalise(w) not in _SET_NAME_NOISE]
     return " ".join(kept) or None
+
+
+def _card_key(identity: CardIdentity, set_query: str) -> str:
+    """The provider-id key a card's tcgPlayerId is cached under: language,
+    set, number and name, normalised, and never the grade."""
+    parts = (
+        identity.language.value,
+        _normalise(set_query),
+        _number_key(identity.set_number) or "",
+        _normalise(identity.card_name or ""),
+    )
+    return "card:" + "|".join(parts)
 
 
 def _choose_set(sets: list[Json], set_query: str) -> str | None:
