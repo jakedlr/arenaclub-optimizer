@@ -58,3 +58,24 @@
 - **Interruptions.** We hit an account usage limit overnight. Agents resumed cleanly after the reset.
 - **Still blocked:** the user needs a PokéPrice Tracker key to get real rankings. Until then, Manual Overrides via `arena review` are the only route.
 - **Carry-over to Sprint 4:** check `FetchResult.skipped` (degraded runs), rebuild providers every cycle, and honour Retry-After. These are in #38.
+
+## Sprint 4: Watch Mode (2026-11-25)
+**Done:**
+- Alert detection and state (#36, PR #41)
+- ntfy notifier and Topic (#37, PR #40)
+- The `arena watch` loop (#38, PR #42)
+
+1565 tests. Live checks (run in scratch XDG dirs, Topic redacted): `arena watch --once --category pokemon --price-max 100` gave 0 ranked and 3 unrankable (no PokéPrice key yet). `arena topic --test` was delivered.
+
+**Retro**
+- **Parallel stories with a shared helper.** #36 and #37 both added `state_dir()` and the same test fixture. We merged one, then brought the other up to date by merging `main` in rather than rebasing, as the reviewer suggested. That resolved everything in one step.
+- **Flapping alerts were the main design risk.** Reviewers found three edges where a pack could re-send "New Top Result": the top-N cut, Value Coverage dips, and packs skipped for long periods. Detection now runs on the uncut matching list. Packs that are below coverage or skipped keep their state, with a 24 h staleness limit.
+- **Leaks happen in the docs too.** The blocking Sprint 4 finding was in the README, not the code: the `nohup` recipe created a world-readable log that starts with the Topic. Reviewers now run documented recipes, not just the code.
+- **Real-process probes paid off.** Running `arena watch` offline under `unshare -rn` with SIGTERM caught a `pkill` pattern that killed unrelated shells.
+- **Interruptions.** Two more account usage limits hit. Agents resumed cleanly each time.
+
+## v1 summary
+- All four sprints are complete: offline calculator → live ranking → values → Watch Mode.
+- Every change went through a PR, a reviewer subagent and green CI. Reviews found real bugs in every sprint, and they were fixed before merge.
+- The main open dependency is the user's PokéPrice Tracker key. Without it, only CardVolume (about 65 Pokémon cards) and Manual Overrides supply values.
+- Remaining non-blocking items are in the Backlog issue.
