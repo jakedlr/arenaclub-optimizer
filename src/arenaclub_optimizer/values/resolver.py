@@ -172,11 +172,8 @@ def is_valued_without_lookup(
     so without spending a credit: it has a Manual Override, or a fresh cached
     quote from one of `providers`. A stale quote doesn't count, since the
     resolver tries to refresh it first."""
-    if overrides.lookup(card.card_id, card.cert_number) is not None:
-        return True
-    return any(
-        _is_fresh_quote(cache.get(card.card_id, p.name, now=now)) for p in providers
-    )
+    entries = _cache_entries(card, providers, cache, now)
+    return _free_quote(card, overrides, entries, now) is not None
 
 
 def is_arena_club_graded(identity: CardIdentity) -> bool:
@@ -221,26 +218,11 @@ class _Run:
         self.unavailable: dict[str, ProviderUnavailable] = {}
 
     def resolve(self, card: ChecklistCard) -> None:
-        override = self.overrides.lookup(card.card_id, card.cert_number)
-        if override is not None:
-            quote = ValueQuote(
-                market_value=override,
-                source=OVERRIDE_SOURCE,
-                as_of=self.now.date(),
-                sales_count=None,
-                confidence=ValueConfidence.HIGH,
-            )
-            self._found(card, quote, ValueOrigin.OVERRIDE)
+        entries = _cache_entries(card, self.providers, self.cache, self.now)
+        free = _free_quote(card, self.overrides, entries, self.now)
+        if free is not None:
+            self._found(card, *free)
             return
-
-        entries = {
-            p.name: self.cache.get(card.card_id, p.name, now=self.now)
-            for p in self.providers
-        }
-        for entry in entries.values():
-            if _is_fresh_quote(entry):
-                self._found(card, entry.result, ValueOrigin.CACHE)
-                return
 
         asked = self._ask_providers(card, entries)
         if asked.quote is not None:
@@ -331,6 +313,43 @@ class _Run:
     ) -> None:
         self.values[card.card_id] = quote
         self.origins[card.card_id] = origin
+
+
+def _cache_entries(
+    card: ChecklistCard,
+    providers: Sequence[ValueProvider],
+    cache: ValueCache,
+    now: datetime,
+) -> dict[str, CacheEntry | None]:
+    """Each provider's cached answer for `card`, by provider name, in
+    provider order."""
+    return {p.name: cache.get(card.card_id, p.name, now=now) for p in providers}
+
+
+def _free_quote(
+    card: ChecklistCard,
+    overrides: Overrides,
+    entries: Mapping[str, CacheEntry | None],
+    now: datetime,
+) -> tuple[ValueQuote, ValueOrigin] | None:
+    """The quote `card` gets without asking a provider, and where it came
+    from: its Manual Override, else the first fresh cached quote among
+    `entries` (in provider order). None if neither applies. Shared by
+    `resolve_values` and `is_valued_without_lookup`, so they agree."""
+    override = overrides.lookup(card.card_id, card.cert_number)
+    if override is not None:
+        quote = ValueQuote(
+            market_value=override,
+            source=OVERRIDE_SOURCE,
+            as_of=now.date(),
+            sales_count=None,
+            confidence=ValueConfidence.HIGH,
+        )
+        return quote, ValueOrigin.OVERRIDE
+    for entry in entries.values():
+        if _is_fresh_quote(entry):
+            return entry.result, ValueOrigin.CACHE
+    return None
 
 
 def _is_quote(entry: CacheEntry) -> bool:
