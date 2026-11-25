@@ -211,22 +211,23 @@ def detect(
         if pack_id in unknown
     }
     alerts: list[Alert] = []
-    for result in report.results:
+    # A stable sort, so the Alerts come out in order whatever the report's.
+    for result in sorted(report.results, key=lambda r: -r.ev.buyback_ev_pct):
         pack_id = result.pack.pack_id
         ev_pct = result.ev.buyback_ev_pct
         entry = previous.packs.get(pack_id)
-        if entry is None:
-            alert = _entered(result)
-        elif ev_pct - entry.buyback_ev_pct >= ev_step_pct - FLOAT_TOLERANCE:
-            alert = _improved(result, entry)
-        else:
+        if entry is not None and not _risen(entry, ev_pct, ev_step_pct):
             packs[pack_id] = entry
             continue
-        alerts.append(alert)
+        alerts.append(_pack_alert(result, entry))
         packs[pack_id] = AlertedPack(ev_pct, now)
-
-    alerts.sort(key=lambda a: -_ev_pct(a))
     return alerts, replace(previous, packs=packs)
+
+
+def _risen(entry: AlertedPack, ev_pct: float, step: float) -> bool:
+    """Whether `ev_pct` is at least `step` above the value last alerted,
+    allowing float noise: 0.10 to 0.15 is a rise of 0.04999999999999999."""
+    return ev_pct - entry.buyback_ev_pct >= step - FLOAT_TOLERANCE
 
 
 def detect_health(
@@ -248,55 +249,36 @@ def detect_health(
     return None, state
 
 
-def _ev_pct(alert: Alert) -> float:
-    assert alert.result is not None
-    return alert.result.ev.buyback_ev_pct
-
-
 # --- messages -------------------------------------------------------------------
 
 
-def _entered(result: RankedPack) -> Alert:
+def _pack_alert(result: RankedPack, entry: AlertedPack | None) -> Alert:
+    """Entered when there is no previous `entry`, else Improved. The message
+    gives the figures, the price, the rise for an Improved Alert, then the
+    Notes, the High-variance Note named as such."""
     name = pack_name(result.pack)
-    return _pack_alert(
-        AlertKind.ENTERED, f"New Top Result: {name}", result, ("new",), ()
-    )
-
-
-def _improved(result: RankedPack, entry: AlertedPack) -> Alert:
-    name = pack_name(result.pack)
-    since = f"Buyback EV % up from {entry.buyback_ev_pct:+.1%} when last alerted."
-    return _pack_alert(
-        AlertKind.IMPROVED,
-        f"Buyback EV up: {name}",
-        result,
-        ("chart_with_upwards_trend",),
-        (since,),
-    )
-
-
-def _pack_alert(
-    kind: AlertKind,
-    title: str,
-    result: RankedPack,
-    tags: tuple[str, ...],
-    extra: tuple[str, ...],
-) -> Alert:
-    """An Entered or Improved Alert: the figures, the price, `extra` lines,
-    then the Notes, the High-variance Note named as such."""
     ev, risk = result.ev, result.risk
-    figures = (
-        f"{pack_name(result.pack)}: Buyback EV {ev.buyback_ev_pct:+.1%} "
-        f"({_money(ev.buyback_ev)}), P(profit) {_percent(risk.p_profit)}"
-    )
-    notes = tuple(
+    lines = [
+        f"{name}: Buyback EV {ev.buyback_ev_pct:+.1%} "
+        f"({_money(ev.buyback_ev)}), P(profit) {_percent(risk.p_profit)}",
+        f"Price {_money(result.pack.price)}.",
+    ]
+    if entry is None:
+        kind, title, tags = AlertKind.ENTERED, f"New Top Result: {name}", ["new"]
+    else:
+        kind, title = AlertKind.IMPROVED, f"Buyback EV up: {name}"
+        tags = ["chart_with_upwards_trend"]
+        lines.append(
+            f"Buyback EV % up from {entry.buyback_ev_pct:+.1%} when last alerted."
+        )
+    lines += (
         f"High-variance Note: {note}" if note == risk.note else note
         for note in result.notes
     )
-    lines = (figures, f"Price {_money(result.pack.price)}.", *extra, *notes)
     if risk.high_variance:
-        tags = (*tags, _HIGH_VARIANCE_TAG)
-    return Alert(kind, title, _fit("\n".join(lines)), Priority.DEFAULT, tags, result)
+        tags.append(_HIGH_VARIANCE_TAG)
+    message = _fit("\n".join(lines))
+    return Alert(kind, title, message, Priority.DEFAULT, tuple(tags), result)
 
 
 def _failed(outcome: HealthOutcome) -> Alert:
@@ -326,7 +308,7 @@ def _recovered() -> Alert:
     return Alert(
         AlertKind.HEALTH_RECOVERED,
         "Watch Mode recovered",
-        "Requests to Arena Club are working again, so Alerts resume.",
+        "Requests to Arena Club are working again.",
         Priority.DEFAULT,
         ("white_check_mark",),
     )
