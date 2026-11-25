@@ -12,7 +12,6 @@ from typing import Any, Protocol
 
 from arenaclub_optimizer.arena_client import ArenaApiError, ArenaBlockedError
 from arenaclub_optimizer.arena_mapping import (
-    ACTIVE_STATUS,
     ArenaMappingError,
     PackRates,
     is_card_product,
@@ -101,8 +100,10 @@ def _card_pack_ids(levels: list[Json]) -> list[tuple[str, str]]:
 
 def _fetch_one(client: ArenaSource, pack_json: Json) -> tuple[SlabPack, PackRates]:
     rates = pack_rates(pack_json)
-    if pack_json.get("status") != ACTIVE_STATUS or rates.buyback_rate is None:
-        return map_slab_pack({**pack_json, "tiers": []}, {}), rates
+    # Mapping without tiers needs no cards, and settles whether the pack is active.
+    shell = map_slab_pack({**pack_json, "tiers": []}, {})
+    if not shell.active or rates.buyback_rate is None:
+        return shell, rates
     # Malformed tiers are left for map_slab_pack to report.
     tiers = [t for t in pack_json.get("tiers") or () if isinstance(t, dict)]
     card_ids = [card_id for tier in tiers for card_id in tier.get("itemIds") or ()]
