@@ -20,10 +20,11 @@ Vocabulary follows GLOSSARY.md; the rules are in docs/plan.md (Watch Mode).
 
 import itertools
 import logging
+import signal
 import sqlite3
 import time
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -146,15 +147,14 @@ class Backoff:
 class Cycle:
     """How one cycle went.
 
-    `health` is the outcome Arena Club gave, or None when the cycle failed
-    on this side (an unusable value cache) before it was known. `report` is
-    None when nothing was ranked. `problem` describes a failure. `sent` and
+    `health` is how the cycle went, for `detect_health`. `report` is None
+    when nothing was ranked. `problem` describes a failure. `sent` and
     `failed` count the Alerts sent and those that couldn't be.
     """
 
     started_at: datetime
     state: AlertState
-    health: HealthOutcome | None
+    health: HealthOutcome
     report: RankingReport | None
     sent: int = 0
     failed: int = 0
@@ -162,11 +162,11 @@ class Cycle:
 
     @property
     def ok(self) -> bool:
-        return self.health is not None and self.health.kind is HealthKind.OK
+        return self.health.kind is HealthKind.OK
 
     @property
     def retry_after(self) -> float | None:
-        return None if self.health is None else self.health.retry_after
+        return self.health.retry_after
 
 
 def run_cycle(
@@ -181,9 +181,10 @@ def run_cycle(
     """Run one cycle from `state` at `now` and send its Alerts.
 
     The client is closed before values are looked up, as in `rank`. A
-    blocked or failed request, or a degraded fetch, gives a health outcome
-    for `detect_health`; Slab Packs are still alerted on in a degraded
-    cycle, whose skipped packs keep their entries. A failed notification is
+    blocked or failed request, a degraded fetch, or an unusable value cache
+    gives a health outcome for `detect_health`. Slab Packs are still alerted
+    on in a degraded cycle, whose skipped packs keep their entries. A failed
+    notification is
     logged (with `topic` redacted) and left out of the returned state, so
     the next cycle tries it again.
     """
@@ -208,13 +209,14 @@ def run_cycle(
                     coverage_threshold=config.coverage_threshold,
                 )
         except (OSError, sqlite3.Error) as error:
+            health = HealthOutcome.value_cache(str(error))
             problem = f"could not use the value cache: {error}"
             logger.error("%s", problem)
-            return Cycle(now, state, None, None, problem=problem)
-        report = rank(
-            fetched.packs, config, values, skipped=fetched.skipped, generated_at=now
-        )
-        health = HealthOutcome.from_fetch(fetched)
+        else:
+            report = rank(
+                fetched.packs, config, values, skipped=fetched.skipped, generated_at=now
+            )
+            health = HealthOutcome.from_fetch(fetched)
 
     alerts: list[Alert] = []
     new_state = state
@@ -255,11 +257,13 @@ def run_watch(
 
     KeyboardInterrupt (Ctrl+C, or SIGTERM as the CLI maps it) abandons the
     cycle in progress, whose client and value sources are closed on the way
-    out, saves the state of the last finished cycle and returns.
+    out, saves the state of the last finished cycle and returns. SIGINT and
+    SIGTERM are ignored during that save, so a second signal can't cut it
+    short. Interrupted while the state is still loading, it saves nothing.
     """
     interval = config.watch.interval_minutes * 60
     backoff = Backoff(interval)
-    state = load_state(state_directory)
+    state: AlertState | None = None
     last: Cycle | None = None
 
     def show(cycle: Cycle, backing_off: float | None = None) -> None:
@@ -267,6 +271,7 @@ def run_watch(
             echo(summary_line(cycle, backing_off=backing_off))
 
     try:
+        state = load_state(state_directory)
         for count in itertools.count(1):
             start = clock.monotonic()
             last = run_cycle(
@@ -286,7 +291,12 @@ def run_watch(
                 show(last, backing_off=wait)
                 clock.sleep(wait)
     except KeyboardInterrupt:
-        if _save(state, state_directory):
+        if state is None:
+            echo("Stopped.")
+            return last
+        with _signals_ignored():
+            saved = _save(state, state_directory)
+        if saved:
             echo("Stopped; Alert state saved.")
         else:
             echo("Stopped; the Alert state could not be saved.")
@@ -314,7 +324,7 @@ def summary_line(cycle: Cycle, *, backing_off: float | None = None) -> str:
         sent += f", {cycle.failed} failed"
     parts.append(sent)
     health = cycle.health
-    if health is not None and health.kind is HealthKind.DEGRADED:
+    if health.kind is HealthKind.DEGRADED:
         parts.append(
             f"degraded ({health.skipped} of {health.total} Slab Packs skipped)"
         )
@@ -377,6 +387,23 @@ def _save(state: AlertState, directory: Path | None) -> bool:
         logger.error("could not save the Alert state: %s", error)
         return False
     return True
+
+
+@contextmanager
+def _signals_ignored() -> Iterator[None]:
+    """Ignore SIGINT and SIGTERM in the block, then restore their handlers.
+    Off the main thread, where handlers can't be set, it does nothing."""
+    signals = (signal.SIGINT, signal.SIGTERM)
+    try:
+        previous = [signal.signal(signum, signal.SIG_IGN) for signum in signals]
+    except ValueError:
+        yield
+        return
+    try:
+        yield
+    finally:
+        for signum, handler in zip(signals, previous, strict=True):
+            signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
 
 
 def _redact(text: str, topic: str | None) -> str:

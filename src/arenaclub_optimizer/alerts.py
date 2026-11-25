@@ -94,6 +94,7 @@ class HealthKind(StrEnum):
     BLOCKED = "blocked"
     API_ERROR = "api_error"
     DEGRADED = "degraded"
+    VALUE_CACHE = "value_cache"
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,12 @@ class HealthOutcome:
         return cls(HealthKind.DEGRADED, skipped=skipped, total=total)
 
     @classmethod
+    def value_cache(cls, error: str) -> HealthOutcome:
+        """The value cache couldn't be used, as `error` describes: a local
+        fault, such as a full disk or a locked database."""
+        return cls(HealthKind.VALUE_CACHE, error=error)
+
+    @classmethod
     def from_fetch(cls, result: FetchResult) -> HealthOutcome:
         """Degraded when more than half of the fetched Slab Packs were
         skipped, which is how a network loss mid-run shows up; else ok."""
@@ -214,11 +221,15 @@ def detect(
     same level send nothing. Every Top Result's entry is marked as seen at
     `now`, which must be timezone-aware.
 
-    A pack no longer among the Top Results is dropped silently, so it is
-    Entered again if it returns. A pack in `report.skipped` couldn't be
-    evaluated this cycle, so its entry is kept as it is, but only until
-    `stale_after` has passed since it was last seen: a pack skipped for days
-    (e.g. its Hit Rates were rejected) is Entered again when it returns.
+    A pack that left the Top Results through the EV %, P(profit) or
+    High-variance filters is dropped silently, so it is Entered again if it
+    returns. A pack in `report.skipped` couldn't be evaluated this cycle,
+    and one in `report.unrankable` fell below Value Coverage (e.g. a
+    replacement card has no value yet), so neither says whether it still
+    meets the criteria: its entry is kept as it is, but only until
+    `stale_after` has passed since it was last seen. A pack held like that
+    for days (e.g. its Hit Rates were rejected) is Entered again when it
+    returns.
 
     Alerts are sorted by Buyback EV % descending, ties in Top Results order.
 
@@ -231,7 +242,9 @@ def detect(
     if stale_after <= timedelta(0):
         raise ValueError(f"stale_after must be positive, got {stale_after}")
 
-    unknown = {skip.pack_id for skip in report.skipped}
+    unknown = {skip.pack_id for skip in report.skipped} | {
+        low.pack.pack_id for low in report.unrankable
+    }
     packs = {
         pack_id: entry
         for pack_id, entry in previous.packs.items()
@@ -326,6 +339,9 @@ def _failed(outcome: HealthOutcome) -> Alert:
                 f"{outcome.skipped} of {outcome.total} Slab Packs were skipped "
                 "this cycle, which usually means the network dropped mid-run."
             )
+        case HealthKind.VALUE_CACHE:
+            title = "Watch Mode can't use its value cache"
+            problem = f"Could not use the value cache: {outcome.error}."
         case _:
             title = "Arena Club requests are failing"
             problem = outcome.error or "A request to Arena Club failed."
@@ -339,7 +355,7 @@ def _recovered() -> Alert:
     return _alert(
         AlertKind.HEALTH_RECOVERED,
         "Watch Mode recovered",
-        "Requests to Arena Club are working again.",
+        "Watch Mode cycles are working again.",
         Priority.DEFAULT,
         ("white_check_mark",),
     )

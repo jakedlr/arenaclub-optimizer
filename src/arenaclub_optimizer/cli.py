@@ -3,6 +3,7 @@ import logging
 import random
 import signal
 import sqlite3
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from rich.console import Console, RenderableType
 from rich.measure import Measurement
 from rich.text import Text
 
+from arenaclub_optimizer.alerts import HealthKind
 from arenaclub_optimizer.arena_client import (
     ArenaApiError,
     ArenaBlockedError,
@@ -408,7 +410,8 @@ def watch(
         bool,
         typer.Option(
             "--once",
-            help="Run one cycle, then exit: 0 if it went fine, 1 if it failed.",
+            help="Run one cycle, then exit: 0 if it went fine, 2 if Arena Club "
+            "blocked a request (as rank does), 1 for any other failure.",
         ),
     ] = False,
     quiet: Annotated[
@@ -474,7 +477,8 @@ def watch(
             topic=name,
         )
     if once and last is not None and not last.ok:
-        raise typer.Exit(code=1)
+        blocked = last.health.kind is HealthKind.BLOCKED
+        raise typer.Exit(code=EXIT_USAGE if blocked else 1)
 
 
 def _settings(changes: Mapping[str, Any]) -> tuple[Config, Overrides]:
@@ -565,14 +569,24 @@ def _progress(console: Console) -> Iterator[Callable[[int, int], None] | None]:
         yield lambda done, total: status.update(f"Fetching Slab Packs… {done}/{total}")
 
 
-def _configure_logging() -> None:
-    """Log to stderr with timestamps. The httpx and httpcore loggers are kept
-    at WARNING or above: at INFO httpx logs every request URL, and the ntfy
-    URL holds the Topic."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+def log_formatter() -> logging.Formatter:
+    """Log lines stamped in UTC, like Watch Mode's summary lines, e.g.
+    "2026-11-26 10:00:00 UTC WARNING arenaclub_optimizer.watch: ..."."""
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S UTC",
     )
+    formatter.converter = time.gmtime
+    return formatter
+
+
+def _configure_logging() -> None:
+    """Log to stderr with `log_formatter`. The httpx and httpcore loggers are
+    kept at WARNING or above: at INFO httpx logs every request URL, and the
+    ntfy URL holds the Topic."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(log_formatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
     for name in ("httpx", "httpcore"):
         logger = logging.getLogger(name)
         logger.setLevel(max(logger.level, logging.WARNING))
