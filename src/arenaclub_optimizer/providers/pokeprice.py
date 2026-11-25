@@ -27,6 +27,7 @@ import httpx
 
 from arenaclub_optimizer.arena_client import USER_AGENT
 from arenaclub_optimizer.model import CardIdentity, ValueConfidence
+from arenaclub_optimizer.spacing import RequestSpacer
 from arenaclub_optimizer.values import (
     CreditBudget,
     NotFound,
@@ -201,10 +202,7 @@ class PokePriceProvider:
             timeout=timeout,
             transport=transport,
         )
-        self._min_interval = min_interval
-        self._clock = clock
-        self._sleep = sleep
-        self._last_request_at: float | None = None
+        self._spacer = RequestSpacer(min_interval, clock=clock, sleep=sleep)
 
     @classmethod
     def from_environment(
@@ -417,7 +415,7 @@ class PokePriceProvider:
         if self._disabled is not None:  # e.g. by a 401 earlier in the run
             raise ProviderUnavailable(reason=self._disabled)
         self._budget.spend_or_raise(NAME, cost)
-        self._wait_for_slot()
+        self._spacer.wait()
         logger.debug("PokéPrice GET %s (%d credits)", path, cost)
         # Raised outside the `except`, so the error keeps no reference to the
         # httpx exception and its request (which carries the key).
@@ -466,14 +464,6 @@ class PokePriceProvider:
                 retry_after, reason="PokéPrice daily limit reached"
             )
         return ProviderUnavailable(retry_after, reason="PokéPrice rate limited")
-
-    def _wait_for_slot(self) -> None:
-        """Sleep until `min_interval` has passed since the previous request."""
-        if self._last_request_at is not None:
-            remaining = self._min_interval - (self._clock() - self._last_request_at)
-            if remaining > 0:
-                self._sleep(remaining)
-        self._last_request_at = self._clock()
 
 
 # --- matching ----------------------------------------------------------------
