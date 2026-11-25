@@ -1,9 +1,13 @@
 import json
+import logging
+import random
+import signal
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime
 from importlib.metadata import version
+from types import FrameType
 from typing import Annotated, Any, NoReturn
 
 import typer
@@ -56,6 +60,7 @@ from arenaclub_optimizer.valuation import (
     value_packs,
 )
 from arenaclub_optimizer.values import ValueResolution
+from arenaclub_optimizer.watch import Clock, Resources, SystemClock, run_watch
 
 app = typer.Typer(help="Rank Arena Club Slab Packs by expected value.")
 
@@ -69,6 +74,10 @@ make_value_sources: Callable[[], AbstractContextManager[ValueSources]] = (
 # Builds the ntfy notifier for a server and Topic. Tests replace it with one on
 # an httpx.MockTransport.
 make_notifier: Callable[[str, str], AbstractContextManager[Notifier]] = NtfyNotifier
+# Watch Mode's clock (with sleep) and the random source for its jitter. Tests
+# replace them with fakes.
+watch_clock: Clock = SystemClock()
+watch_random: random.Random = random.Random()
 
 TEST_NOTIFICATION = PlainNotification(
     title="arenaclub-optimizer test",
@@ -87,6 +96,7 @@ OPTION_NAMES = {
     "filters.min_ev_pct": "--min-ev (as a fraction)",
     "filters.min_p_profit": "--min-p-profit (as a fraction)",
     "filters.top": "--top",
+    "watch.interval_minutes": "--interval",
 }
 
 # Exit code for bad input or a block by Arena Club; typer uses 2 for usage errors.
@@ -118,6 +128,38 @@ PriceMaxOption = Annotated[
 JsonOption = Annotated[
     bool, typer.Option("--json", help="Print JSON instead of a table.")
 ]
+# The metric filters and k, shared by `rank` and `watch`.
+MinEvOption = Annotated[
+    float | None,
+    typer.Option(
+        "--min-ev",
+        help="Minimum Buyback EV %, in percent: 5 means 5%. May be negative. "
+        "Default: config file, else none.",
+    ),
+]
+MinPProfitOption = Annotated[
+    float | None,
+    typer.Option(
+        "--min-p-profit",
+        help="Minimum P(profit), in percent from 0 to 100: 20 means 20%. "
+        "Default: config file, else none.",
+    ),
+]
+HighVarianceOption = Annotated[
+    bool | None,
+    typer.Option(
+        "--exclude-high-variance/--include-high-variance",
+        help="Drop (or keep) Slab Packs with a High-variance Note. "
+        "Default: config file, else keep.",
+    ),
+]
+KOption = Annotated[
+    float | None,
+    typer.Option(
+        "--k",
+        help="Assumed AC Value / Market Value ratio. Default: config file, else 1.",
+    ),
+]
 
 
 def _print_version(value: bool) -> None:
@@ -146,30 +188,9 @@ def rank(
     category: CategoryOption = None,
     price_min: PriceMinOption = None,
     price_max: PriceMaxOption = None,
-    min_ev: Annotated[
-        float | None,
-        typer.Option(
-            "--min-ev",
-            help="Minimum Buyback EV %, in percent: 5 means 5%. May be negative. "
-            "Default: config file, else none.",
-        ),
-    ] = None,
-    min_p_profit: Annotated[
-        float | None,
-        typer.Option(
-            "--min-p-profit",
-            help="Minimum P(profit), in percent from 0 to 100: 20 means 20%. "
-            "Default: config file, else none.",
-        ),
-    ] = None,
-    exclude_high_variance: Annotated[
-        bool | None,
-        typer.Option(
-            "--exclude-high-variance/--include-high-variance",
-            help="Drop (or keep) Slab Packs with a High-variance Note. "
-            "Default: config file, else keep.",
-        ),
-    ] = None,
+    min_ev: MinEvOption = None,
+    min_p_profit: MinPProfitOption = None,
+    exclude_high_variance: HighVarianceOption = None,
     top: Annotated[
         int | None,
         typer.Option(
@@ -177,13 +198,7 @@ def rank(
             help="How many Top Results to show. Default: config file, else 10.",
         ),
     ] = None,
-    k: Annotated[
-        float | None,
-        typer.Option(
-            "--k",
-            help="Assumed AC Value / Market Value ratio. Default: config file, else 1.",
-        ),
-    ] = None,
+    k: KOption = None,
     wide: Annotated[
         bool,
         typer.Option(
@@ -372,10 +387,94 @@ def topic(
 
 
 @app.command()
-def watch() -> None:
-    """Run Watch Mode."""
-    typer.echo("arena watch: not implemented yet", err=True)
-    raise typer.Exit(code=1)
+def watch(
+    category: CategoryOption = None,
+    price_min: PriceMinOption = None,
+    price_max: PriceMaxOption = None,
+    min_ev: MinEvOption = None,
+    min_p_profit: MinPProfitOption = None,
+    exclude_high_variance: HighVarianceOption = None,
+    k: KOption = None,
+    interval: Annotated[
+        float | None,
+        typer.Option(
+            "--interval",
+            metavar="MINUTES",
+            help="Minutes between cycles, at least 5; each wait varies by up "
+            "to 10% either way. Default: config file, else 10.",
+        ),
+    ] = None,
+    once: Annotated[
+        bool,
+        typer.Option(
+            "--once",
+            help="Run one cycle, then exit: 0 if it went fine, 1 if it failed.",
+        ),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet",
+            help="Print a cycle's summary line only when the cycle fails.",
+        ),
+    ] = False,
+) -> None:
+    """Run Watch Mode: rank on an interval and send Alerts to your Topic.
+
+    Each cycle runs the same pipeline as `rank` with the same filters, then
+    sends an Alert through ntfy when a Slab Pack newly meets the criteria
+    or its Buyback EV % rises a step, and one when requests to Arena Club
+    start failing and one when they recover. Every pack that meets the
+    criteria counts, so there is no --top here. Each cycle prints a summary
+    line. A failed cycle backs off: the interval, doubling up to two hours,
+    or longer if Arena Club asks with Retry-After. Ctrl+C or SIGTERM stops
+    it, saving the Alert state. Prints the Topic and its subscribe URL at
+    start; see `arena topic`.
+    """
+    _configure_logging()
+    config, overrides = _settings(
+        {
+            "k": k,
+            "filters": {
+                "categories": category or None,
+                "price_min": price_min,
+                "price_max": price_max,
+                "min_ev_pct": _fraction(min_ev),
+                "min_p_profit": _fraction(min_p_profit),
+                "exclude_high_variance": exclude_high_variance,
+            },
+            "watch": {"interval_minutes": interval},
+        }
+    )
+    try:
+        name = get_or_create_topic(config, state_dir())
+    except ConfigError as error:
+        _fail(f"Error: {error}", EXIT_USAGE)
+    except OSError as error:
+        _fail(f"Error: could not save the Topic: {error}", 1)
+
+    server = config.watch.ntfy_server
+    typer.echo(f"Topic: {name}")
+    typer.echo(f"Subscribe URL: {subscribe_url(server, name)}")
+    resources = Resources(
+        client=make_client,
+        values=make_value_sources,
+        notifier=lambda: make_notifier(server, name),
+    )
+    with _sigterm_as_interrupt():
+        last = run_watch(
+            config,
+            overrides,
+            resources,
+            clock=watch_clock,
+            rng=watch_random,
+            max_cycles=1 if once else None,
+            quiet=quiet,
+            echo=typer.echo,
+            topic=name,
+        )
+    if once and last is not None and not last.ok:
+        raise typer.Exit(code=1)
 
 
 def _settings(changes: Mapping[str, Any]) -> tuple[Config, Overrides]:
@@ -464,6 +563,40 @@ def _progress(console: Console) -> Iterator[Callable[[int, int], None] | None]:
         return
     with console.status("Fetching Slab Packs…") as status:
         yield lambda done, total: status.update(f"Fetching Slab Packs… {done}/{total}")
+
+
+def _configure_logging() -> None:
+    """Log to stderr with timestamps. The httpx and httpcore loggers are kept
+    at WARNING or above: at INFO httpx logs every request URL, and the ntfy
+    URL holds the Topic."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for name in ("httpx", "httpcore"):
+        logger = logging.getLogger(name)
+        logger.setLevel(max(logger.level, logging.WARNING))
+
+
+@contextmanager
+def _sigterm_as_interrupt() -> Iterator[None]:
+    """While in the block, SIGTERM raises KeyboardInterrupt, so it stops Watch
+    Mode as Ctrl+C does. The previous handler is restored afterwards."""
+
+    def interrupt(signum: int, frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        previous = signal.signal(signal.SIGTERM, interrupt)
+    except ValueError:  # not the main thread: leave SIGTERM alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(
+            signal.SIGTERM, previous if previous is not None else signal.SIG_DFL
+        )
 
 
 @contextmanager

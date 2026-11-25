@@ -204,7 +204,10 @@ def detect(
 ) -> tuple[list[Alert], AlertState]:
     """The Alerts for this cycle's Top Results, and the new state.
 
-    A Top Result with no entry in `previous` is Entered. One with an entry is
+    The Top Results here are all of `report.matching`, every Slab Pack that
+    met the criteria, not only the top N that `rank` shows, so a pack moving
+    across that cut isn't Entered again. One with no entry in `previous` is
+    Entered. One with an entry is
     Improved when its Buyback EV % is at least `ev_step_pct` (a fraction:
     0.05 is 5 percentage points) above the value last alerted; the entry
     keeps that value until the next Alert, so a dip and a recovery to the
@@ -236,7 +239,7 @@ def detect(
     }
     alerts: list[Alert] = []
     # A stable sort, so the Alerts come out in order whatever the report's.
-    for result in sorted(report.results, key=lambda r: -r.ev.buyback_ev_pct):
+    for result in sorted(report.matching, key=lambda r: -r.ev.buyback_ev_pct):
         pack_id = result.pack.pack_id
         ev_pct = result.ev.buyback_ev_pct
         entry = previous.packs.get(pack_id)

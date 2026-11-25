@@ -143,7 +143,8 @@ def test_keeps_only_the_top_n():
 
 
 def test_matching_holds_every_pack_that_passes_the_filters_before_the_top_n_cut():
-    packs = [flat_pack(f"p{i}", 100 + i) for i in range(5)] + [risky_pack("risky")]
+    # Worth 120+ for a $100 pack: a sure profit, so no High-variance Note.
+    packs = [flat_pack(f"p{i}", 120 + i) for i in range(5)] + [risky_pack("risky")]
 
     report = run(packs, with_filters(top=2, exclude_high_variance=True))
 

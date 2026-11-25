@@ -43,6 +43,8 @@ market_value = 120
 """
 
 SUMMARY = re.compile(r"^\[\d{4}-\d\d-\d\d \d\d:\d\d UTC\] ")
+# rich colours help text where it detects CI, e.g. with GITHUB_ACTIONS set.
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class FakeClock:
@@ -333,6 +335,7 @@ def test_a_generated_topic_is_saved_and_printed(world, config_dir, state_dir):
 
 def test_watch_help_lists_the_options():
     result = runner.invoke(app, ["watch", "--help"], env={"COLUMNS": "200"})
+    text = ANSI_ESCAPE.sub("", result.stdout)
 
     for option in (
         "--category",
@@ -346,7 +349,16 @@ def test_watch_help_lists_the_options():
         "--once",
         "--quiet",
     ):
-        assert option in result.stdout
+        assert option in text
+
+
+def test_watch_has_no_top_option(world):
+    # Alerts cover every Slab Pack that meets the criteria, and watch
+    # prints no table, so a top-N cut would do nothing.
+    result = watch("--once", "--top", "3")
+
+    assert result.exit_code == 2
+    assert "--top" in ANSI_ESCAPE.sub("", result.stderr)
 
 
 # --- fresh resources ---------------------------------------------------------------
