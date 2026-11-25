@@ -22,13 +22,8 @@ from types import MappingProxyType
 from arenaclub_optimizer._pulls import normalise_checklist
 from arenaclub_optimizer.arena_mapping import PackRates
 from arenaclub_optimizer.config import Filters, Overrides
-from arenaclub_optimizer.ev import DEFAULT_COVERAGE_THRESHOLD
-from arenaclub_optimizer.model import (
-    FLOAT_TOLERANCE,
-    ChecklistCard,
-    SlabPack,
-    TierType,
-)
+from arenaclub_optimizer.ev import DEFAULT_COVERAGE_THRESHOLD, meets_coverage
+from arenaclub_optimizer.model import ChecklistCard, SlabPack, TierType
 from arenaclub_optimizer.providers.cardvolume import CardVolumeProvider
 from arenaclub_optimizer.providers.pokeprice import PokePriceProvider
 from arenaclub_optimizer.ranking import matches_pack_filters, pack_name
@@ -125,7 +120,7 @@ def cards_by_priority(
     to_value: list[SlabPack] = []
     rankable: list[SlabPack] = []
     for pack in packs_by_price(packs_with_rates, filters):
-        covered = _known_coverage(pack, valued) >= coverage_threshold - FLOAT_TOLERANCE
+        covered = meets_coverage(_known_coverage(pack, valued), coverage_threshold)
         (rankable if covered else to_value).append(pack)
     cards: dict[str, ChecklistCard] = {}
     for pack in [*to_value, *rankable]:

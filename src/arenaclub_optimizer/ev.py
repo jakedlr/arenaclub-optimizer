@@ -34,6 +34,7 @@ __all__ = [
     "EVResult",
     "HitRateRejectedError",
     "evaluate_ev",
+    "meets_coverage",
 ]
 
 DEFAULT_SLAB_SAFE_FLOOR = 0.8
@@ -114,13 +115,18 @@ def evaluate_ev(
         buyback_ev_pct=buyback_ev / cost,
         slab_safe_ev=slab_safe_ev,
         value_coverage=value_coverage,
-        # FLOAT_TOLERANCE lets normalised Hit Rates adding up to e.g.
-        # 0.9499999999999998 still count as 95%.
-        rankable=value_coverage >= coverage_threshold - FLOAT_TOLERANCE,
+        rankable=meets_coverage(value_coverage, coverage_threshold),
         lower_bound=bool(unvalued),
         missing_top_tiers=_missing_top_tiers(unvalued),
         normalization_status=normalization.status,
     )
+
+
+def meets_coverage(value_coverage: float, coverage_threshold: float) -> bool:
+    """Whether a Slab Pack with `value_coverage` is rankable. FLOAT_TOLERANCE
+    lets normalised Hit Rates adding up to e.g. 0.9499999999999998 still
+    count as 95%."""
+    return value_coverage >= coverage_threshold - FLOAT_TOLERANCE
 
 
 def _missing_top_tiers(unvalued: list[ChecklistCard]) -> tuple[str, ...]:
