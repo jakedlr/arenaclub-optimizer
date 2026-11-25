@@ -786,6 +786,78 @@ def test_the_plural_promos_wildcard_still_needs_year_and_number():
     )
 
 
+# --- review follow-ups: an unchecked promo year ------------------------------
+
+
+def index_with_mega(server: Server, **changes) -> None:
+    """Serve the index with the Mega Charizard promo entry changed; a change
+    to None removes the key."""
+
+    def changed(card: dict) -> dict:
+        if not card["id"].endswith("mega-charizard-x-ex-023"):
+            return card
+        merged = {**card, **changes}
+        return {k: v for k, v in merged.items() if v is not None}
+
+    server.index = {**INDEX, "cards": [changed(card) for card in INDEX_CARDS]}
+
+
+def test_a_promo_matched_without_the_identitys_year_is_low_confidence(provider):
+    result = provider.quote(mega_identity(year=None))
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 132.5
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_matched_without_the_index_year_is_low_confidence(tmp_path, server):
+    index_with_mega(server, year=None)
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(mega_identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_whose_index_year_is_a_matching_string_is_low_confidence(
+    tmp_path, server
+):
+    index_with_mega(server, year="2025")
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(mega_identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_a_promo_whose_index_year_is_another_years_string_is_unmatched(
+    tmp_path, server
+):
+    index_with_mega(server, year="2023")
+    with make_provider(tmp_path, server) as provider:
+        assert provider.quote(mega_identity()) == Unmatched()
+
+
+def test_match_card_compares_a_string_year_as_a_number():
+    wotc = {**WOTC_PIKACHU, "year": " 2000 "}
+    assert match_card([wotc], promo_identity("Pikachu", "27", 2023)) is None
+    found = match_card([wotc], promo_identity("Pikachu", "27", 2000))
+    assert found is not None
+    assert found["id"] == WOTC_PIKACHU["id"]
+
+
+def test_a_promo_matched_on_both_years_stays_high_confidence(provider):
+    result = provider.quote(mega_identity())
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.HIGH
+
+
+def test_a_named_set_without_a_year_stays_high_confidence(provider):
+    result = provider.quote(identity(year=None))
+    assert isinstance(result, ValueQuote)
+    assert result.confidence is ValueConfidence.HIGH
+
+
 # --- review follow-ups: confidence -------------------------------------------
 
 
