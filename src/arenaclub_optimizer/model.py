@@ -47,7 +47,8 @@ class ChecklistCard:
     """One card on a Slab Pack's Checklist.
 
     `hit_rate` is a probability from 0 to 1, not a percentage. `market_value` is
-    in dollars, or None when no Market Value is known.
+    in dollars, or None when no Market Value is known. `cert_number` is the
+    grading company's cert number, when known; Manual Overrides can key on it.
 
     Raises ValueError if `market_value` is NaN, infinite or negative.
     """
@@ -61,6 +62,7 @@ class ChecklistCard:
     grade: str
     market_value: float | None
     value_confidence: ValueConfidence | None
+    cert_number: str | None = None
 
     def __post_init__(self) -> None:
         value = self.market_value

@@ -68,7 +68,8 @@ def map_slab_pack(pack_json: Json, cards_json: Mapping[str, Json]) -> SlabPack:
 
     `cards_json` maps each card id to its `/v3/items/{id}` (or `/v4/items`)
     response. Checklist cards come in tier order, then `itemIds` order, with no
-    Market Value yet.
+    Market Value yet. Only identity fields are read from card JSON, because the
+    client caches it forever; fields such as `status` or `priceBadge` change.
 
     Raises ArenaMappingError, naming the pack, for an unknown tier type, a card
     id missing from `cards_json`, a malformed Hit Rate or a missing field.
@@ -192,6 +193,7 @@ def _map_card(
         grade=_grade(card_json.get("overall")),
         market_value=None,
         value_confidence=None,
+        cert_number=_text(card_json.get("cardCertNumber")) or None,
     )
 
 

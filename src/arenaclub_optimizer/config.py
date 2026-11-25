@@ -10,7 +10,8 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -114,7 +115,39 @@ def load_config(path: Path | None = None, *, directory: Path | None = None) -> C
     data = _read_toml(path)
     if data is None:
         return Config()
-    reader = _Reader(path)
+    return _parse_config(_Reader(path), data)
+
+
+def override_config(
+    config: Config,
+    changes: Mapping[str, Any],
+    *,
+    source: str = "command line",
+    names: Mapping[str, str] | None = None,
+) -> Config:
+    """Return `config` with `changes` applied, checked by the config file's rules.
+
+    `changes` has the config file's layout: top-level keys, plus `filters` and
+    `watch` tables. A None value leaves that setting as it is. Error messages
+    start with `source` and show each key as `names` gives it (e.g.
+    "filters.top" as "--top"), else as the file would.
+
+    Raises ConfigError for an unknown key or an invalid value, including a
+    price range whose minimum (from either side) is above its maximum.
+    """
+    data = _as_toml(config)
+    for key, value in changes.items():
+        if isinstance(value, Mapping):
+            table = data.setdefault(key, {})
+            if isinstance(table, dict):
+                table.update({k: v for k, v in value.items() if v is not None})
+                continue
+        if value is not None:
+            data[key] = value
+    return _parse_config(_Reader(source, names), data)
+
+
+def _parse_config(reader: _Reader, data: dict[str, Any]) -> Config:
     reader.reject_unknown(data, Config, "")
     filters = reader.table(data, "filters")
     watch = reader.table(data, "watch")
@@ -140,6 +173,20 @@ def load_config(path: Path | None = None, *, directory: Path | None = None) -> C
         filters=_filters(reader, filters),
         watch=_watch(reader, watch),
     )
+
+
+def _as_toml(value: Any) -> Any:
+    """A Config (or part of one) in the parsed-TOML shape `_parse_config` reads:
+    tables as dicts, tuples as lists, enums as strings, and None left out."""
+    if is_dataclass(value) and not isinstance(value, type):
+        value = {f.name: getattr(value, f.name) for f in fields(value)}
+    if isinstance(value, dict):
+        return {k: _as_toml(v) for k, v in value.items() if v is not None}
+    if isinstance(value, tuple):
+        return [_as_toml(v) for v in value]
+    if isinstance(value, StrEnum):
+        return value.value
+    return value
 
 
 def load_overrides(
@@ -181,7 +228,8 @@ def _filters(reader: _Reader, data: dict[str, Any]) -> Filters:
     price_max = reader.optional_number(data, "price_max", low=0.0, at=at)
     if price_min is not None and price_max is not None and price_min > price_max:
         raise reader.error(
-            f"{at}price_min", f"({price_min}) is above {at}price_max ({price_max})"
+            f"{at}price_min",
+            f"({price_min}) is above {reader.name(f'{at}price_max')} ({price_max})",
         )
     return Filters(
         categories=reader.str_list(data, "categories", at=at),
@@ -243,13 +291,23 @@ def _read_toml(path: Path) -> dict[str, Any] | None:
 
 
 class _Reader:
-    """Typed, range-checked access to a parsed TOML table, for one file."""
+    """Typed, range-checked access to a parsed TOML table from one source.
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    `source` (a file path, or e.g. "command line") starts every error message,
+    and `names` maps a key such as "filters.top" to how the message shows it.
+    """
+
+    def __init__(
+        self, source: Path | str, names: Mapping[str, str] | None = None
+    ) -> None:
+        self.source = source
+        self.names = names or {}
+
+    def name(self, key: str) -> str:
+        return self.names.get(key, key)
 
     def error(self, key: str, problem: str) -> ConfigError:
-        return ConfigError(f"{self.path}: {key} {problem}")
+        return ConfigError(f"{self.source}: {self.name(key)} {problem}")
 
     def reject_unknown(self, data: dict[str, Any], schema: type, at: str) -> None:
         known = set(schema.__dataclass_fields__)
