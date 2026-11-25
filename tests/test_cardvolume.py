@@ -605,8 +605,9 @@ def test_rate_limits_and_server_errors_raise_provider_unavailable(
     assert str(status) in caught.value.reason
 
 
-def test_a_429_exhausts_todays_budget_when_given_one(tmp_path, server):
-    server.routes[UMBREON_PATH] = httpx.Response(429, text="slow down")
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_refusal_exhausts_todays_budget_when_given_one(tmp_path, server, status):
+    server.routes[UMBREON_PATH] = httpx.Response(status, text="slow down")
     clock = Clock()
     with ValueCache(tmp_path) as cache:
         budget = CreditBudget(cache, {}, clock=clock)
@@ -682,4 +683,220 @@ def test_an_index_id_with_unsafe_characters_is_unmatched_without_a_request(
 
     with make_provider(tmp_path, server) as provider:
         assert provider.quote(identity()) == Unmatched()
+    assert server.paths() == [INDEX_PATH]
+
+
+# --- review follow-ups: promo matching and ambiguity -------------------------
+
+
+def entry(card_id: str, name: str, set_name: str, number: str, year: int) -> dict:
+    return {
+        "id": card_id,
+        "name": name,
+        "category": "pokemon",
+        "set": set_name,
+        "number": number,
+        "year": year,
+        "language": "English",
+    }
+
+
+WOTC_PIKACHU = entry(
+    "pokemon/wotc-promo/pikachu-27", "Pikachu", "Wizards Promo Cards", "27", 2000
+)
+SV_PIKACHU = entry(
+    "pokemon/sv-promo/pikachu-027",
+    "Pikachu",
+    "Scarlet & Violet Promo Cards",
+    "027",
+    2023,
+)
+
+
+def promo_identity(name: str, number: str, year: int | None) -> CardIdentity:
+    return CardIdentity(
+        year=year,
+        set_name=f"{year} Pokemon",
+        insert=None,
+        subset_name="Promo",
+        card_name=name,
+        set_number=number,
+        grader="psa",
+        grade="10",
+    )
+
+
+@pytest.mark.parametrize(
+    ("year", "expected"),
+    [(2023, SV_PIKACHU["id"]), (2000, WOTC_PIKACHU["id"])],
+)
+def test_the_promo_wildcard_needs_the_year_to_match(year, expected):
+    cards = [WOTC_PIKACHU, SV_PIKACHU]
+    found = match_card(cards, promo_identity("Pikachu", "027", year))
+    assert found is not None
+    assert found["id"] == expected
+
+
+def test_the_promo_wildcard_rejects_another_years_promo():
+    assert match_card([WOTC_PIKACHU], promo_identity("Pikachu", "27", 2023)) is None
+    assert match_card(INDEX_CARDS, mega_identity(year=2024)) is None
+
+
+def test_several_promo_matches_without_a_year_are_unmatched():
+    cards = [WOTC_PIKACHU, SV_PIKACHU]
+    assert match_card(cards, promo_identity("Pikachu", "27", None)) is None
+
+
+def test_an_ambiguous_match_is_unmatched():
+    twin = {**INDEX_CARDS[0], "id": "pokemon/evolving-skies/umbreon-vmax-215-twin"}
+    assert match_card([*INDEX_CARDS, twin], identity()) is None
+
+
+def test_the_promo_wildcard_matches_plural_promos_sets():
+    charizard = entry(
+        "pokemon/sm-black-star-promos/charizard-gx-sm211",
+        "Charizard-GX",
+        "SM Black Star Promos",
+        "SM211/248",
+        2019,
+    )
+    found = match_card(
+        [*INDEX_CARDS, charizard], promo_identity("Charizard GX", "SM211", 2019)
+    )
+    assert found is not None
+    assert found["id"] == charizard["id"]
+
+
+def test_the_plural_promos_wildcard_still_needs_year_and_number():
+    found = match_card(
+        INDEX_CARDS, promo_identity("Moltres & Zapdos & Articuno GX", "SM210", 2019)
+    )
+    assert found is not None
+    assert (
+        match_card(
+            INDEX_CARDS, promo_identity("Moltres & Zapdos & Articuno GX", "SM210", 2020)
+        )
+        is None
+    )
+    assert (
+        match_card(
+            INDEX_CARDS, promo_identity("Moltres & Zapdos & Articuno GX", "SM211", 2019)
+        )
+        is None
+    )
+
+
+# --- review follow-ups: confidence -------------------------------------------
+
+
+def umbreon_grade(grader: str, grade: str, price: float, version_key: str) -> dict:
+    return {
+        "version_key": version_key,
+        "grader": grader,
+        "grade": grade,
+        "market_price_usd": price,
+        "market_sales_n": 6,
+        "last_verified_sale": {"date": "2026-11-01", "price_usd": price},
+    }
+
+
+def test_a_suffix_only_grade_match_is_low_confidence(tmp_path, server):
+    card = fixture(f"{UMBREON}.json")
+    card["grades"].append(
+        umbreon_grade("BGS", "10 Black Label", 9000, "english-alternate-art-secret")
+    )
+    server.routes[UMBREON_PATH] = lambda: httpx.Response(200, json=card)
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(identity(grader="bgs", grade="10"))
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 9000
+    assert result.sales_count == 6
+    assert result.confidence is ValueConfidence.LOW
+
+
+def test_several_versions_at_the_grade_are_low_confidence(tmp_path, server):
+    card = fixture(f"{UMBREON}.json")
+    card["grades"].append(umbreon_grade("PSA", "10", 500, "japanese-promo"))
+    server.routes[UMBREON_PATH] = lambda: httpx.Response(200, json=card)
+
+    with make_provider(tmp_path, server) as provider:
+        ten = provider.quote(identity(grade="10"))
+        nine = provider.quote(identity(grade="9"))
+
+    assert isinstance(ten, ValueQuote)
+    assert ten.market_value == 3800.0
+    assert ten.confidence is ValueConfidence.LOW
+    assert isinstance(nine, ValueQuote)
+    assert nine.confidence is ValueConfidence.HIGH
+
+
+# --- review follow-ups: a stale index as a fallback --------------------------
+
+
+def stale_index(tmp_path: Path) -> Clock:
+    """Cache the fixture index, then move the clock two days on."""
+    clock = Clock()
+    with make_provider(tmp_path, Server(FakeMonotonic()), utc_now=clock) as provider:
+        provider.quote(identity("Nobody"))
+    clock.now = NOW + timedelta(days=2)
+    return clock
+
+
+def broken_index(server: Server, failure: str) -> None:
+    if failure == "network":
+
+        def fail(request=None):
+            raise httpx.ConnectError("no route")
+
+        server.routes[INDEX_PATH] = fail
+    elif failure == "not json":
+        server.routes[INDEX_PATH] = httpx.Response(200, text="<html>oops</html>")
+    else:
+        server.routes[INDEX_PATH] = httpx.Response(503, text="down")
+
+
+@pytest.mark.parametrize("failure", ["503", "network", "not json"])
+def test_a_failed_refresh_falls_back_to_the_stale_index(
+    tmp_path, server, caplog, failure
+):
+    clock = stale_index(tmp_path)
+    broken_index(server, failure)
+
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        result = provider.quote(identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 3800.0
+    assert server.paths() == [INDEX_PATH, UMBREON_PATH]
+    assert any(
+        "stale" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records
+    )
+
+
+def test_a_stale_fallback_keeps_the_index_stale_for_the_next_run(tmp_path, server):
+    clock = stale_index(tmp_path)
+    broken_index(server, "503")
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    later = Server(FakeMonotonic())
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    assert later.paths()[0] == INDEX_PATH
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_refused_refresh_still_raises_and_backs_off(tmp_path, server, status):
+    clock = stale_index(tmp_path)
+    server.routes[INDEX_PATH] = httpx.Response(status, text="no")
+
+    with ValueCache(tmp_path) as cache:
+        budget = CreditBudget(cache, {}, clock=clock)
+        with make_provider(tmp_path, server, utc_now=clock, budget=budget) as p:
+            with pytest.raises(ProviderUnavailable, match=str(status)):
+                p.quote(identity())
+        assert not budget.can_spend("cardvolume", 0)
     assert server.paths() == [INDEX_PATH]
