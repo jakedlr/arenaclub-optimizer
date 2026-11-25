@@ -13,6 +13,8 @@ Observed from the arenaclub.com frontend; unofficial and subject to change.
   Gold Pokémon example: Super Grail 0.0002%×1, Grail 0.02%×3, Chase 0.25%×8, Lineup 1.96%×50.
 - `GET /v4/items/{card_id}`: card identity. `year, brand, playerName, setName, subsetName, setNumber, parallelName, insert, gradingCompany, overall` (grade), `slabKind, rarity, holo, team, cardCertNumber, status, priceBadge, clPriceBadge`. **No AC Value.**
 - No sold-out or remaining-count field; only `status`.
+- **Language:** card JSON has no language field. Japanese cards are marked only by a `JPN` word in `setName` (e.g. "2001 Pokemon Neo 4 JPN", "2019 Pokemon S&M JPN "), 8 of 62 in the Gold Pokémon snapshot; `insert` and `subsetName` never carry it. We treat `JPN` in `setName` (as a whole word, any case) as Japanese and everything else as English.
+- `setName` can have trailing spaces, and `insert` is missing or null on 9 of 62 snapshot cards (their `subsetName` is "Base" or "Promo"). Arena Club grades (`gradingCompany: arena_club`, certs `8AC…`) are 6 of 62.
 - `POST /v3/repacks/{id}/purchase-details` requires `type: 'stripe'|'wallet'`. It's probably a checkout quote. Not called with a valid body, because it might start a purchase.
 
 ## AC Value availability (spike 2, 2026-11-24)
