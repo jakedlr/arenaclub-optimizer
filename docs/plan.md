@@ -22,7 +22,7 @@ Decisions from the planning session on 2026-11-24. Vocabulary is defined in `GLO
 - **Watch Mode:**
   - runs locally; default interval 10 min, minimum 5, with jitter
   - sends an Alert only when a Slab Pack newly meets the criteria or its EV % moves past a threshold, deduped using local state
-  - ntfy: a random ~24-character Topic generated on first run and saved to local config; prints `https://ntfy.sh/<topic>`; the server is configurable
+  - ntfy: a random 24-character Topic generated on first run and saved in the local state directory (`$XDG_STATE_HOME/arenaclub-optimizer/topic`, never the user's config file; `watch.topic` in config overrides it); `arena topic` prints `https://ntfy.sh/<topic>` and `--test` sends a test notification; the server is configurable
   - sends one Alert when requests start failing
 - **Stack:** Python 3.14, uv, pytest, ruff, httpx, typer, rich.
 - Secrets and local state (`.env`, config, cache) are gitignored and never committed. The repo is public.

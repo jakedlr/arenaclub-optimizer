@@ -25,8 +25,17 @@ from arenaclub_optimizer.config import (
     load_config,
     load_overrides,
     override_config,
+    state_dir,
 )
 from arenaclub_optimizer.fetch import ArenaSource, FetchResult, fetch_card_packs
+from arenaclub_optimizer.notify import (
+    Notifier,
+    NotifyError,
+    NtfyNotifier,
+    PlainNotification,
+    get_or_create_topic,
+    subscribe_url,
+)
 from arenaclub_optimizer.output import (
     note_lines,
     overrides_snippet,
@@ -56,6 +65,16 @@ make_client: Callable[[], AbstractContextManager[ArenaSource]] = ArenaClient
 # with fakes.
 make_value_sources: Callable[[], AbstractContextManager[ValueSources]] = (
     open_value_sources
+)
+# Builds the ntfy notifier for a server and Topic. Tests replace it with one on
+# an httpx.MockTransport.
+make_notifier: Callable[[str, str], AbstractContextManager[Notifier]] = NtfyNotifier
+
+TEST_NOTIFICATION = PlainNotification(
+    title="arenaclub-optimizer test",
+    message="Test notification from arena topic --test. If you can read this, "
+    "Watch Mode Alerts will reach you.",
+    tags=("white_check_mark",),
 )
 
 # How CLI-set config keys appear in error messages. Percent options are
@@ -306,6 +325,50 @@ def review(
     for line in unavailable_lines(values):
         console.print(Text(line))
     console.print(Text(review_summary(entries)))
+
+
+@app.command()
+def topic(
+    test: Annotated[
+        bool,
+        typer.Option(
+            "--test",
+            help="Also send one test notification, to check your subscription.",
+        ),
+    ] = False,
+) -> None:
+    """Print the Topic Watch Mode sends Alerts to, and how to subscribe to it.
+
+    The Topic is `watch.topic` from the config file if set, else a random one
+    generated on first use and saved in $XDG_STATE_HOME/arenaclub-optimizer
+    (else ~/.local/state/arenaclub-optimizer). Anyone who knows it can read
+    your Alerts, so keep it private. The server is `watch.ntfy_server`,
+    https://ntfy.sh by default.
+    """
+    try:
+        config = load_config()
+        name = get_or_create_topic(config, state_dir())
+    except ConfigError as error:
+        _fail(f"Error: {error}", EXIT_USAGE)
+    except OSError as error:
+        _fail(f"Error: could not save the Topic: {error}", 1)
+
+    server = config.watch.ntfy_server
+    url = subscribe_url(server, name)
+    typer.echo(f"Topic: {name}")
+    typer.echo(f"Subscribe URL: {url}")
+    typer.echo(
+        f"To get Alerts, subscribe to the Topic in the ntfy app (server {server}), "
+        "or open the Subscribe URL in a browser."
+    )
+    if not test:
+        return
+    try:
+        with make_notifier(server, name) as notifier:
+            notifier.send(TEST_NOTIFICATION)
+    except NotifyError as error:
+        _fail(f"Error: the test notification was not sent: {error}", 1)
+    typer.echo("Test notification sent.")
 
 
 @app.command()

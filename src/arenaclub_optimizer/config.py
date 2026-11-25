@@ -2,8 +2,9 @@
 
 Both files are TOML and live in `$XDG_CONFIG_HOME/arenaclub-optimizer/`, falling
 back to `~/.config/arenaclub-optimizer/`. `cache_dir` is the matching cache
-directory, shared by the card and value caches. Loading never writes anything; a
-missing file means defaults (or no Manual Overrides).
+directory, shared by the card and value caches, and `state_dir` the matching
+state directory, for Watch Mode's Topic and Alert state. Loading never writes
+anything; a missing file means defaults (or no Manual Overrides).
 """
 
 import math
@@ -28,6 +29,12 @@ MIN_INTERVAL_MINUTES = 5
 CARD_ID_PREFIX = "card_"
 # ntfy topics: letters, digits, `_` and `-`, at most 64 characters.
 _TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+TOPIC_RULE = "must be 1-64 letters, digits, '_' or '-' characters"
+
+
+def is_valid_topic(topic: str) -> bool:
+    """Whether `topic` is a usable ntfy Topic: 1-64 letters, digits, `_` or `-`."""
+    return _TOPIC_RE.fullmatch(topic) is not None
 
 
 class ConfigError(ValueError):
@@ -49,7 +56,7 @@ class Filters:
 
 @dataclass(frozen=True)
 class Watch:
-    """Watch Mode settings. Values only; Watch Mode itself is Sprint 4."""
+    """Watch Mode settings. `topic` None means the generated one (see notify)."""
 
     interval_minutes: float = 10.0
     ntfy_server: str = "https://ntfy.sh"
@@ -122,6 +129,22 @@ def cache_dir(
     if xdg and Path(xdg).is_absolute():
         return Path(xdg) / APP_DIR_NAME
     return (home if home is not None else Path.home()) / ".cache" / APP_DIR_NAME
+
+
+def state_dir(
+    environ: Mapping[str, str] | None = None, home: Path | None = None
+) -> Path:
+    """Return the app's state directory, honouring `XDG_STATE_HOME`.
+
+    Per the XDG spec, an unset, empty or relative `XDG_STATE_HOME` is ignored,
+    and the default is `~/.local/state`.
+    """
+    env = os.environ if environ is None else environ
+    xdg = env.get("XDG_STATE_HOME", "")
+    if xdg and Path(xdg).is_absolute():
+        return Path(xdg) / APP_DIR_NAME
+    base = home if home is not None else Path.home()
+    return base / ".local" / "state" / APP_DIR_NAME
 
 
 def load_config(path: Path | None = None, *, directory: Path | None = None) -> Config:
@@ -280,10 +303,8 @@ def _watch(reader: _Reader, data: dict[str, Any]) -> Watch:
         )
 
     topic = reader.optional_str(data, "topic", at=at)
-    if topic is not None and not _TOPIC_RE.fullmatch(topic):
-        raise reader.error(
-            f"{at}topic", "must be 1-64 letters, digits, '_' or '-' characters"
-        )
+    if topic is not None and not is_valid_topic(topic):
+        raise reader.error(f"{at}topic", TOPIC_RULE)
     return Watch(interval_minutes=interval, ntfy_server=server, topic=topic)
 
 

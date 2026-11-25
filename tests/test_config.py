@@ -14,9 +14,11 @@ from arenaclub_optimizer.config import (
     Overrides,
     Watch,
     config_dir,
+    is_valid_topic,
     load_config,
     load_overrides,
     override_config,
+    state_dir,
 )
 from arenaclub_optimizer.cost import PaymentMethod
 
@@ -51,6 +53,35 @@ def test_config_dir_falls_back_to_home_dot_config(tmp_path, env):
 def test_config_dir_reads_process_environment_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert config_dir() == tmp_path / APP_DIR_NAME
+
+
+def test_state_dir_uses_xdg_state_home(tmp_path):
+    env = {"XDG_STATE_HOME": str(tmp_path / "xdg")}
+    assert state_dir(env, home=tmp_path / "home") == tmp_path / "xdg" / APP_DIR_NAME
+
+
+@pytest.mark.parametrize(
+    "env", [{}, {"XDG_STATE_HOME": ""}, {"XDG_STATE_HOME": "relative/state"}]
+)
+def test_state_dir_falls_back_to_home_local_state(tmp_path, env):
+    assert state_dir(env, home=tmp_path) == tmp_path / ".local" / "state" / APP_DIR_NAME
+
+
+def test_state_dir_reads_process_environment_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    assert state_dir() == tmp_path / APP_DIR_NAME
+
+
+@pytest.mark.parametrize("topic", ["a", "Abc_123-xyz", "x" * 64])
+def test_valid_topics(topic):
+    assert is_valid_topic(topic)
+
+
+@pytest.mark.parametrize(
+    "topic", ["", "x" * 65, "has space", "slash/topic", "é", "a\n"]
+)
+def test_invalid_topics(topic):
+    assert not is_valid_topic(topic)
 
 
 def test_app_dir_and_file_names():
