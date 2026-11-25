@@ -78,4 +78,4 @@
 - All four sprints are complete: offline calculator → live ranking → values → Watch Mode.
 - Every change went through a PR, a reviewer subagent and green CI. Reviews found real bugs in every sprint, and they were fixed before merge.
 - The main open dependency is the user's PokéPrice Tracker key. Without it, only CardVolume (about 65 Pokémon cards) and Manual Overrides supply values.
-- Remaining non-blocking items are in the Backlog issue.
+- Remaining non-blocking items are in the Backlog issue (#43).
