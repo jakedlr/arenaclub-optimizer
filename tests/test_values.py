@@ -445,7 +445,7 @@ def test_exhaust_marks_the_rest_of_today_spent(cache):
     assert budget.remaining("pokeprice", now=NOW) == 0
     assert not budget.try_spend("pokeprice", 1, now=NOW)
     assert not budget.can_spend("pokeprice", 1, now=NOW)
-    assert budget.try_spend("pokeprice", 0, now=NOW)
+    assert not budget.try_spend("pokeprice", 0, now=NOW)
     tomorrow = NOW + timedelta(days=1)
     assert budget.remaining("pokeprice", now=tomorrow) == 100
 
@@ -457,6 +457,22 @@ def test_exhaust_applies_to_a_provider_without_a_limit(cache):
     assert budget.remaining("cardvolume", now=NOW) == 0
     assert not budget.try_spend("cardvolume", 1, now=NOW)
     assert budget.remaining("cardvolume", now=NOW + timedelta(days=1)) is None
+
+
+def test_exhaust_stops_a_free_provider_too(cache):
+    budget = CreditBudget(cache, {})
+    assert budget.can_spend("cardvolume", 0, now=NOW)
+    assert budget.try_spend("cardvolume", 0, now=NOW)
+
+    budget.exhaust("cardvolume", now=NOW)
+
+    assert not budget.can_spend("cardvolume", 0, now=NOW)
+    assert not budget.try_spend("cardvolume", 0, now=NOW)
+    with pytest.raises(BudgetExhausted):
+        budget.spend_or_raise("cardvolume", 0, now=NOW)
+    tomorrow = NOW + timedelta(days=1)
+    assert budget.can_spend("cardvolume", 0, now=tomorrow)
+    assert budget.try_spend("cardvolume", 0, now=tomorrow)
 
 
 def test_exhaust_is_persisted(tmp_path):

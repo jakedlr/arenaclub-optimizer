@@ -1,0 +1,685 @@
+"""CardVolumeProvider against recorded CardVolume responses. No network."""
+
+import json
+from datetime import date, timedelta
+from importlib.metadata import version
+from pathlib import Path
+
+import httpx
+import pytest
+from fake_values import NOW, Clock, identity
+
+from arenaclub_optimizer.model import CardIdentity, Language, ValueConfidence
+from arenaclub_optimizer.providers.cardvolume import (
+    INDEX_FILENAME,
+    CardVolumeProvider,
+    match_card,
+)
+from arenaclub_optimizer.values import (
+    CreditBudget,
+    NotFound,
+    ProviderUnavailable,
+    Unmatched,
+    ValueCache,
+    ValueProvider,
+    ValueQuote,
+    default_cache_dir,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures" / "cardvolume"
+INDEX_PATH = "/api/v1/cards.json"
+UMBREON = "pokemon--evolving-skies--umbreon-vmax-215-203"
+MEGA = "pokemon--mega-evolution-black-star-promos--mega-charizard-x-ex-023"
+UMBREON_PATH = f"/api/v1/cards/{UMBREON}.json"
+MEGA_PATH = f"/api/v1/cards/{MEGA}.json"
+ETAG = 'W/"27237-6610424ae21f5"'
+LAST_MODIFIED = "Tue, 24 Nov 2026 11:38:03 GMT"
+USER_AGENT = (
+    f"arenaclub-optimizer/{version('arenaclub-optimizer')} "
+    "(+https://github.com/jakedlr/arenaclub-optimizer)"
+)
+UMBREON_CITATION = (
+    "Umbreon VMAX 215/203 (Evolving Skies). CardVolume, "
+    "https://cardvolume.com/pokemon/evolving-skies/umbreon-vmax-215-203/ "
+    "(accessed 2026-11-24)."
+)
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+INDEX = fixture("cards.json")
+INDEX_CARDS = INDEX["cards"]
+
+
+def mega_identity(**overrides) -> CardIdentity:
+    """Mega Charizard X ex 023 as Arena Club describes it (no insert)."""
+    fields = {
+        "year": 2025,
+        "set_name": "2025 Pokemon Mega Evolution",
+        "insert": None,
+        "subset_name": "Promo",
+        "parallel_name": "Mega Charizard X ex Ultra-Premium Collection",
+        "card_name": "Mega Charizard X ex",
+        "set_number": "023",
+        "grader": "psa",
+        "grade": "10",
+    }
+    fields.update(overrides)
+    return CardIdentity(**fields)
+
+
+class FakeMonotonic:
+    """A monotonic clock that only moves when the provider sleeps or a test ticks."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class Server:
+    """A MockTransport handler serving the fixtures, recording each request.
+
+    `routes` maps a path to an httpx.Response (or a callable returning one);
+    the index answers 304 to a matching If-None-Match. Unknown paths get
+    CardVolume's 404 HTML page.
+    """
+
+    def __init__(self, monotonic: FakeMonotonic | None = None) -> None:
+        self.monotonic = monotonic
+        self.requests: list[httpx.Request] = []
+        self.sent_at: list[float] = []
+        self.index = INDEX
+        self.etag: str | None = ETAG
+        self.last_modified: str | None = LAST_MODIFIED
+        self.routes: dict[str, object] = {
+            UMBREON_PATH: lambda: httpx.Response(200, json=fixture(f"{UMBREON}.json")),
+            MEGA_PATH: lambda: httpx.Response(200, json=fixture(f"{MEGA}.json")),
+        }
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.monotonic is not None:
+            self.sent_at.append(self.monotonic())
+        path = request.url.path
+        if path in self.routes:
+            route = self.routes[path]
+            return route() if callable(route) else route
+        if path == INDEX_PATH:
+            return self._index(request)
+        return httpx.Response(
+            404,
+            content=(FIXTURES / "not_found.html").read_bytes(),
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
+
+    def _index(self, request: httpx.Request) -> httpx.Response:
+        if self.etag is not None and request.headers.get("If-None-Match") == self.etag:
+            return httpx.Response(304, headers={"ETag": self.etag})
+        headers = {}
+        if self.etag is not None:
+            headers["ETag"] = self.etag
+        if self.last_modified is not None:
+            headers["Last-Modified"] = self.last_modified
+        return httpx.Response(200, json=self.index, headers=headers)
+
+    def paths(self) -> list[str]:
+        return [r.url.path for r in self.requests]
+
+
+def make_provider(
+    tmp_path: Path,
+    server: Server,
+    *,
+    utc_now: Clock | None = None,
+    monotonic: FakeMonotonic | None = None,
+    **kwargs,
+) -> CardVolumeProvider:
+    monotonic = monotonic or server.monotonic or FakeMonotonic()
+    return CardVolumeProvider(
+        cache_dir=tmp_path,
+        transport=httpx.MockTransport(server),
+        clock=monotonic,
+        sleep=monotonic.sleep,
+        utc_now=utc_now or Clock(),
+        **kwargs,
+    )
+
+
+@pytest.fixture
+def server() -> Server:
+    return Server(FakeMonotonic())
+
+
+@pytest.fixture
+def provider(tmp_path, server):
+    with make_provider(tmp_path, server) as provider:
+        yield provider
+
+
+# --- the provider ------------------------------------------------------------
+
+
+def test_is_a_free_value_provider_named_cardvolume(provider):
+    as_protocol: ValueProvider = provider
+    assert as_protocol.name == "cardvolume"
+    assert as_protocol.credit_cost == 0
+
+
+def test_quotes_umbreon_vmax_psa_10_at_its_market_price(provider):
+    result = provider.quote(identity())
+
+    assert result == ValueQuote(
+        market_value=3800.0,
+        source="cardvolume",
+        as_of=date(2026, 11, 24),
+        sales_count=47,
+        confidence=ValueConfidence.HIGH,
+        citation=UMBREON_CITATION,
+    )
+
+
+def test_fetches_the_index_then_the_matched_card(provider, server):
+    provider.quote(identity())
+
+    assert [str(r.url) for r in server.requests] == [
+        "https://cardvolume.com/api/v1/cards.json",
+        f"https://cardvolume.com/api/v1/cards/{UMBREON}.json",
+    ]
+    assert all(r.method == "GET" for r in server.requests)
+
+
+def test_every_request_sends_the_honest_user_agent(provider, server):
+    provider.quote(identity())
+    provider.quote(mega_identity())
+
+    assert len(server.requests) == 3
+    assert all(r.headers["User-Agent"] == USER_AGENT for r in server.requests)
+
+
+def test_requests_are_spaced_at_least_one_second_apart(provider, server):
+    provider.quote(identity())
+    provider.quote(mega_identity())
+
+    gaps = [b - a for a, b in zip(server.sent_at, server.sent_at[1:], strict=False)]
+    assert gaps == [pytest.approx(1.0), pytest.approx(1.0)]
+
+
+def test_quotes_the_mega_charizard_promo_as_arena_club_names_it(provider):
+    result = provider.quote(mega_identity())
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 132.5
+    assert result.sales_count == 23
+    assert result.confidence is ValueConfidence.HIGH
+    assert result.as_of == date(2026, 11, 24)
+    assert result.citation is not None
+    assert result.citation.startswith("Mega Charizard X ex 023/132")
+
+
+def test_grader_matches_case_insensitively(provider):
+    result = provider.quote(identity(grader="PSA"))
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 3800.0
+
+
+def test_exact_grade_wins_over_a_suffixed_one(provider):
+    result = provider.quote(mega_identity(grader="cgc", grade="10"))
+
+    assert result == ValueQuote(
+        market_value=172.41,
+        source="cardvolume",
+        as_of=date(2026, 9, 12),
+        sales_count=1,
+        confidence=ValueConfidence.LOW,
+        citation=fixture(f"{MEGA}.json")["cite_as"],
+    )
+
+
+def test_a_grade_with_a_suffix_matches_its_number(tmp_path, server):
+    card = fixture(f"{MEGA}.json")
+    card["grades"] = [g for g in card["grades"] if g["grade"] != "10"]
+    server.routes[MEGA_PATH] = httpx.Response(200, json=card)
+
+    with make_provider(tmp_path, server) as provider:
+        result = provider.quote(mega_identity(grader="cgc", grade="10"))
+
+    assert isinstance(result, ValueQuote)
+    assert result.market_value == 229.3
+    assert result.as_of == date(2026, 9, 22)
+
+
+def test_without_a_market_price_quotes_the_last_verified_sale_at_low_confidence(
+    provider,
+):
+    result = provider.quote(identity(grade="7"))
+
+    assert result == ValueQuote(
+        market_value=1677.7,
+        source="cardvolume",
+        as_of=date(2026, 9, 20),
+        sales_count=1,
+        confidence=ValueConfidence.LOW,
+        citation=UMBREON_CITATION,
+    )
+
+
+def test_without_a_market_price_or_a_sale_is_not_found(tmp_path, server):
+    card = fixture(f"{UMBREON}.json")
+    for grade in card["grades"]:
+        if grade["grade"] == "7":
+            grade["last_verified_sale"] = None
+    server.routes[UMBREON_PATH] = httpx.Response(200, json=card)
+
+    with make_provider(tmp_path, server) as provider:
+        assert provider.quote(identity(grade="7")) == NotFound()
+
+
+def test_a_grade_the_card_has_no_entry_for_is_not_found(provider):
+    assert provider.quote(identity(grade="8")) == NotFound()
+    assert provider.quote(identity(grader="bgs")) == NotFound()
+
+
+def test_a_grade_needs_its_whole_number_not_just_a_prefix(provider):
+    # "1" must not match "10".
+    assert provider.quote(identity(grade="1")) == NotFound()
+
+
+def test_an_ungraded_card_is_not_found_without_fetching_it(provider, server):
+    assert provider.quote(identity(grader=None, grade=None)) == NotFound()
+    assert server.paths() == [INDEX_PATH]
+
+
+def test_a_card_missing_from_the_index_is_unmatched_without_fetching(provider, server):
+    assert provider.quote(identity("Mewtwo", set_number="10")) == Unmatched()
+    assert server.paths() == [INDEX_PATH]
+
+
+def test_a_card_page_answering_404_html_is_unmatched(tmp_path, server):
+    del server.routes[UMBREON_PATH]
+
+    with make_provider(tmp_path, server) as provider:
+        assert provider.quote(identity()) == Unmatched()
+    assert server.paths() == [INDEX_PATH, UMBREON_PATH]
+
+
+def test_a_card_is_fetched_once_per_provider(provider, server):
+    provider.quote(identity(grade="10"))
+    provider.quote(identity(grade="9"))
+
+    assert server.paths() == [INDEX_PATH, UMBREON_PATH]
+
+
+# --- matching ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, "pokemon/evolving-skies/umbreon-vmax-215-203"),
+        ({"card_name": "UMBREON VMAX"}, "pokemon/evolving-skies/umbreon-vmax-215-203"),
+        ({"set_number": "215/203"}, "pokemon/evolving-skies/umbreon-vmax-215-203"),
+        ({"set_number": "0215"}, "pokemon/evolving-skies/umbreon-vmax-215-203"),
+        (
+            {"insert": None, "subset_name": "Evolving Skies"},
+            "pokemon/evolving-skies/umbreon-vmax-215-203",
+        ),
+        (
+            {
+                "card_name": "Moltres/Zapdos/Articuno GX",
+                "insert": "SM Black Star Promos",
+                "set_number": "SM210",
+                "year": 2019,
+            },
+            "pokemon/sm-black-star-promos/moltres-and-zapdos-and-articuno-gx-sm210",
+        ),
+        (
+            {
+                "card_name": "Moltres & Zapdos & Articuno-GX",
+                "insert": "SM Black Star Promos",
+                "set_number": "SM210",
+            },
+            "pokemon/sm-black-star-promos/moltres-and-zapdos-and-articuno-gx-sm210",
+        ),
+        (
+            {
+                "card_name": "Mega Charizard X EX",
+                "insert": "Mega Evolution Promo Cards",
+                "set_number": "023",
+            },
+            "pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023",
+        ),
+        (
+            {
+                "card_name": "Mega Charizard X-ex",
+                "insert": "Mega Evolution Promo Cards",
+                "set_number": "23",
+            },
+            "pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023",
+        ),
+        (
+            {
+                "card_name": "Radiant Charizard",
+                "insert": "Crown Zenith",
+                "set_number": "020",
+            },
+            "pokemon/crown-zenith/radiant-charizard-020-159",
+        ),
+        (
+            {
+                "card_name": "Mewtwo VSTAR",
+                "insert": "Crown Zenith Galarian Gallery",
+                "set_number": "GG44",
+            },
+            "pokemon/crown-zenith-galarian-gallery/mewtwo-vstar-gg44-gg70",
+        ),
+        (
+            {
+                "card_name": "Charizard",
+                "insert": "Japanese Base Set",
+                "set_number": "6",
+                "language": Language.JAPANESE,
+            },
+            "pokemon/japanese-base-set/charizard-no-rarity-006-japanese",
+        ),
+    ],
+)
+def test_match_card_normalises_both_sides(fields, expected):
+    entry = match_card(INDEX_CARDS, identity(**fields))
+    assert entry is not None
+    assert entry["id"] == expected
+
+
+def test_match_card_finds_a_promo_by_name_and_number_in_a_promo_set():
+    entry = match_card(INDEX_CARDS, mega_identity())
+    assert entry is not None
+    assert entry["id"] == (
+        "pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023"
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"set_number": "214"},
+        {"set_number": "21"},
+        {"card_name": "Umbreon ex"},
+        {"card_name": "Umbreon"},
+        {"insert": "Fusion Strike"},
+        {"insert": None, "subset_name": None},
+        {"set_number": None},
+        {"card_name": None},
+        {"language": Language.JAPANESE},
+        # A Japanese card isn't matched for an English identity.
+        {"card_name": "Charizard", "insert": "Japanese Base Set", "set_number": "6"},
+        # Same name, another set's number.
+        {
+            "card_name": "Mega Charizard X ex",
+            "insert": "Mega Evolution Promo Cards",
+            "set_number": "125",
+        },
+    ],
+)
+def test_match_card_rejects_near_misses(fields):
+    assert match_card(INDEX_CARDS, identity(**fields)) is None
+
+
+def test_match_card_skips_malformed_entries():
+    cards = [{"id": 1}, "junk", {"name": None}, *INDEX_CARDS]
+    entry = match_card(cards, identity())
+    assert entry is not None
+    assert entry["id"] == "pokemon/evolving-skies/umbreon-vmax-215-203"
+
+
+# --- the index cache ---------------------------------------------------------
+
+
+def test_the_index_is_fetched_once_per_provider(provider, server):
+    provider.quote(identity())
+    provider.quote(mega_identity())
+    provider.quote(identity("Nobody"))
+
+    assert server.paths().count(INDEX_PATH) == 1
+
+
+def test_the_index_is_cached_on_disk_next_to_the_value_cache(tmp_path, server):
+    with make_provider(tmp_path, server) as provider:
+        provider.quote(identity())
+
+    assert (tmp_path / INDEX_FILENAME).is_file()
+    with ValueCache(tmp_path) as cache:
+        assert cache.path.parent == (tmp_path / INDEX_FILENAME).parent
+
+
+def test_the_default_cache_dir_is_the_value_cache_dir(tmp_path):
+    with CardVolumeProvider() as provider:
+        assert provider.index_path == default_cache_dir() / INDEX_FILENAME
+
+
+def test_a_fresh_index_on_disk_is_not_downloaded_again(tmp_path, server):
+    clock = Clock()
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW + timedelta(hours=23)
+    later = Server(FakeMonotonic())
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        assert isinstance(provider.quote(identity()), ValueQuote)
+
+    assert later.paths() == [UMBREON_PATH]
+
+
+def test_the_first_download_sends_no_conditional_headers(provider, server):
+    provider.quote(identity())
+
+    index_request = server.requests[0]
+    assert "If-None-Match" not in index_request.headers
+    assert "If-Modified-Since" not in index_request.headers
+
+
+def test_a_day_old_index_is_revalidated_with_its_etag_and_date(tmp_path, server):
+    clock = Clock()
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW + timedelta(hours=25)
+    later = Server(FakeMonotonic())
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        assert isinstance(provider.quote(identity()), ValueQuote)
+
+    request = later.requests[0]
+    assert request.url.path == INDEX_PATH
+    assert request.headers["If-None-Match"] == ETAG
+    assert request.headers["If-Modified-Since"] == LAST_MODIFIED
+
+
+def test_a_304_keeps_the_cached_index_and_restarts_its_day(tmp_path, server):
+    clock = Clock()
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW + timedelta(hours=25)
+    revalidated = Server(FakeMonotonic())
+    with make_provider(tmp_path, revalidated, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW + timedelta(hours=30)
+    third = Server(FakeMonotonic())
+    with make_provider(tmp_path, third, utc_now=clock) as provider:
+        assert isinstance(provider.quote(identity()), ValueQuote)
+
+    assert revalidated.paths() == [INDEX_PATH, UMBREON_PATH]
+    assert third.paths() == [UMBREON_PATH]
+
+
+def test_only_the_validators_the_server_sent_are_used(tmp_path, server):
+    server.etag = None
+    clock = Clock()
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW + timedelta(days=2)
+    later = Server(FakeMonotonic())
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    request = later.requests[0]
+    assert "If-None-Match" not in request.headers
+    assert request.headers["If-Modified-Since"] == LAST_MODIFIED
+
+
+def test_a_changed_index_replaces_the_cached_one(tmp_path, server):
+    clock = Clock()
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        assert provider.quote(identity("Nobody")) == Unmatched()
+
+    clock.now = NOW + timedelta(days=2)
+    later = Server(FakeMonotonic())
+    later.etag = 'W/"new"'
+    later.index = {
+        **INDEX,
+        "cards": [
+            *INDEX_CARDS,
+            {**INDEX_CARDS[0], "id": "pokemon/x/nobody-215", "name": "Nobody"},
+        ],
+    }
+    later.routes["/api/v1/cards/pokemon--x--nobody-215.json"] = lambda: httpx.Response(
+        200, json=fixture(f"{UMBREON}.json")
+    )
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        assert isinstance(provider.quote(identity("Nobody")), ValueQuote)
+
+    clock.now += timedelta(hours=1)
+    third = Server(FakeMonotonic())
+    third.routes = later.routes
+    with make_provider(tmp_path, third, utc_now=clock) as provider:
+        assert isinstance(provider.quote(identity("Nobody")), ValueQuote)
+    assert INDEX_PATH not in third.paths()
+
+
+def test_an_unreadable_index_file_is_downloaded_again(tmp_path, server):
+    (tmp_path / INDEX_FILENAME).write_text("{not json", encoding="utf-8")
+
+    with make_provider(tmp_path, server) as provider:
+        assert isinstance(provider.quote(identity()), ValueQuote)
+
+    assert server.paths() == [INDEX_PATH, UMBREON_PATH]
+    assert "If-None-Match" not in server.requests[0].headers
+
+
+def test_an_index_from_the_future_is_downloaded_again(tmp_path, server):
+    clock = Clock(NOW + timedelta(days=3))
+    with make_provider(tmp_path, server, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    clock.now = NOW
+    later = Server(FakeMonotonic())
+    with make_provider(tmp_path, later, utc_now=clock) as provider:
+        provider.quote(identity())
+
+    assert later.paths()[0] == INDEX_PATH
+
+
+# --- errors ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503])
+@pytest.mark.parametrize("path", [INDEX_PATH, UMBREON_PATH])
+def test_rate_limits_and_server_errors_raise_provider_unavailable(
+    tmp_path, server, status, path
+):
+    server.routes[path] = httpx.Response(status, text="busy")
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable) as caught:
+            provider.quote(identity())
+
+    assert str(status) in caught.value.reason
+
+
+def test_a_429_exhausts_todays_budget_when_given_one(tmp_path, server):
+    server.routes[UMBREON_PATH] = httpx.Response(429, text="slow down")
+    clock = Clock()
+    with ValueCache(tmp_path) as cache:
+        budget = CreditBudget(cache, {}, clock=clock)
+        with make_provider(tmp_path, server, utc_now=clock, budget=budget) as p:
+            with pytest.raises(ProviderUnavailable) as caught:
+                p.quote(identity())
+
+        assert not budget.can_spend("cardvolume", 0)
+        assert caught.value.retry_after == budget.resets_at()
+
+
+def test_a_403_is_treated_like_a_429(tmp_path, server):
+    server.routes[UMBREON_PATH] = httpx.Response(403, text="forbidden")
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable, match="403"):
+            provider.quote(identity())
+
+
+def test_a_server_error_does_not_exhaust_the_budget(tmp_path, server):
+    server.routes[UMBREON_PATH] = httpx.Response(503, text="down")
+    clock = Clock()
+    with ValueCache(tmp_path) as cache:
+        budget = CreditBudget(cache, {}, clock=clock)
+        with make_provider(tmp_path, server, utc_now=clock, budget=budget) as p:
+            with pytest.raises(ProviderUnavailable):
+                p.quote(identity())
+
+        assert budget.can_spend("cardvolume", 0)
+
+
+def test_a_network_failure_raises_provider_unavailable(tmp_path):
+    def handler(request):
+        raise httpx.ConnectError("no route", request=request)
+
+    with make_provider(tmp_path, handler, monotonic=FakeMonotonic()) as provider:
+        with pytest.raises(ProviderUnavailable):
+            provider.quote(identity())
+
+
+@pytest.mark.parametrize("path", [INDEX_PATH, UMBREON_PATH])
+def test_a_body_that_is_not_json_raises_provider_unavailable(tmp_path, server, path):
+    server.routes[path] = httpx.Response(200, text="<html>maintenance</html>")
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable):
+            provider.quote(identity())
+
+
+def test_an_index_without_a_cards_list_raises_provider_unavailable(tmp_path, server):
+    server.index = {"as_of": "2026-11-24"}
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable):
+            provider.quote(identity())
+
+
+def test_an_unknown_client_error_raises_provider_unavailable(tmp_path, server):
+    server.routes[UMBREON_PATH] = httpx.Response(400, text="bad")
+
+    with make_provider(tmp_path, server) as provider:
+        with pytest.raises(ProviderUnavailable, match="400"):
+            provider.quote(identity())
+
+
+def test_an_index_id_with_unsafe_characters_is_unmatched_without_a_request(
+    tmp_path, server
+):
+    server.index = {
+        **INDEX,
+        "cards": [{**INDEX_CARDS[0], "id": "pokemon/../../etc/umbreon"}],
+    }
+
+    with make_provider(tmp_path, server) as provider:
+        assert provider.quote(identity()) == Unmatched()
+    assert server.paths() == [INDEX_PATH]

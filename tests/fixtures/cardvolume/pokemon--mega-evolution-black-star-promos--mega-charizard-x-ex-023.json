@@ -1,0 +1,53 @@
+{
+ "id": "pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023",
+ "url": "https://cardvolume.com/pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023/",
+ "name": "Mega Charizard X ex",
+ "set": "Mega Evolution Promo Cards",
+ "number": "023/132",
+ "year": 2025,
+ "language": "English",
+ "updated": "2026-11-21",
+ "as_of": "2026-11-24",
+ "versions": [
+  {
+   "key": "ultra-premium-collection-promo-holo",
+   "label": "Ultra-Premium Collection foil promo"
+  }
+ ],
+ "grades": [
+  {
+   "version_key": "ultra-premium-collection-promo-holo",
+   "grader": "PSA",
+   "grade": "10",
+   "market_price_usd": 132.5,
+   "market_sales_n": 23,
+   "last_verified_sale": {
+    "date": "2026-11-20",
+    "price_usd": 116
+   }
+  },
+  {
+   "version_key": "ultra-premium-collection-promo-holo",
+   "grader": "CGC",
+   "grade": "10",
+   "market_price_usd": null,
+   "market_sales_n": 1,
+   "last_verified_sale": {
+    "date": "2026-09-12",
+    "price_usd": 172.41
+   }
+  },
+  {
+   "version_key": "ultra-premium-collection-promo-holo",
+   "grader": "CGC",
+   "grade": "10 Pristine",
+   "market_price_usd": null,
+   "market_sales_n": 1,
+   "last_verified_sale": {
+    "date": "2026-09-22",
+    "price_usd": 229.3
+   }
+  }
+ ],
+ "cite_as": "Mega Charizard X ex 023/132 (Mega Evolution Promo Cards). CardVolume, https://cardvolume.com/pokemon/mega-evolution-black-star-promos/mega-charizard-x-ex-023/ (accessed 2026-11-24)."
+}
