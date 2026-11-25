@@ -16,7 +16,7 @@ import os
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -29,7 +29,9 @@ from arenaclub_optimizer.ranking import RankedPack, RankingReport, pack_name
 
 __all__ = [
     "DEFAULT_EV_STEP_PCT",
+    "DEFAULT_STALE_AFTER",
     "MAX_MESSAGE_BYTES",
+    "MAX_TITLE_BYTES",
     "STATE_FILENAME",
     "Alert",
     "AlertKind",
@@ -52,8 +54,14 @@ STATE_VERSION = 1
 # A rise in Buyback EV % that earns a new Alert: 5 percentage points.
 DEFAULT_EV_STEP_PCT = 0.05
 
+# How long a pack that is only ever skipped keeps its entry, after it was
+# last among the Top Results.
+DEFAULT_STALE_AFTER = timedelta(hours=24)
+
 # ntfy takes messages up to 4096 bytes; stay clear of the limit.
 MAX_MESSAGE_BYTES = 4000
+# The title goes in an HTTP header, so keep it short.
+MAX_TITLE_BYTES = 250
 
 # Over this share of the Slab Packs in scope skipped, a cycle is degraded.
 DEGRADED_SKIP_SHARE = 0.5
@@ -92,9 +100,10 @@ class HealthKind(StrEnum):
 class Alert:
     """A notification to send.
 
-    `message` is plain text of at most MAX_MESSAGE_BYTES in UTF-8. `tags` are
-    ntfy tags; one that names an emoji shows as that emoji. `result` is the
-    Top Result an Entered or Improved Alert is about, None for a health Alert.
+    `title` is at most MAX_TITLE_BYTES in UTF-8, and `message` plain text of
+    at most MAX_MESSAGE_BYTES. `tags` are ntfy tags; one that names an emoji
+    shows as that emoji. `result` is the Top Result an Entered or Improved
+    Alert is about, None for a health Alert.
     """
 
     kind: AlertKind
@@ -107,10 +116,17 @@ class Alert:
 
 @dataclass(frozen=True)
 class AlertedPack:
-    """A Slab Pack's last Alert: its Buyback EV % then, and when it was sent."""
+    """A Slab Pack's last Alert: its Buyback EV % then, and when it was sent.
+    `last_seen_at` is when the pack was last among the Top Results; it
+    defaults to `alerted_at`."""
 
     buyback_ev_pct: float
     alerted_at: datetime
+    last_seen_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.last_seen_at is None:
+            object.__setattr__(self, "last_seen_at", self.alerted_at)
 
 
 def _frozen(
@@ -184,6 +200,7 @@ def detect(
     *,
     now: datetime,
     ev_step_pct: float = DEFAULT_EV_STEP_PCT,
+    stale_after: timedelta = DEFAULT_STALE_AFTER,
 ) -> tuple[list[Alert], AlertState]:
     """The Alerts for this cycle's Top Results, and the new state.
 
@@ -191,24 +208,31 @@ def detect(
     Improved when its Buyback EV % is at least `ev_step_pct` (a fraction:
     0.05 is 5 percentage points) above the value last alerted; the entry
     keeps that value until the next Alert, so a dip and a recovery to the
-    same level send nothing. Alerted packs are recorded as of `now`.
+    same level send nothing. Every Top Result's entry is marked as seen at
+    `now`, which must be timezone-aware.
 
     A pack no longer among the Top Results is dropped silently, so it is
     Entered again if it returns. A pack in `report.skipped` couldn't be
-    evaluated this cycle, so its entry is kept as it is.
+    evaluated this cycle, so its entry is kept as it is, but only until
+    `stale_after` has passed since it was last seen: a pack skipped for days
+    (e.g. its Hit Rates were rejected) is Entered again when it returns.
 
     Alerts are sorted by Buyback EV % descending, ties in Top Results order.
 
-    Raises ValueError if `ev_step_pct` is not positive and finite.
+    Raises ValueError if `now` is naive, or if `ev_step_pct` or `stale_after`
+    is not positive (and finite).
     """
+    _check_aware(now)
     if not (math.isfinite(ev_step_pct) and ev_step_pct > 0):
         raise ValueError(f"ev_step_pct must be positive, got {ev_step_pct}")
+    if stale_after <= timedelta(0):
+        raise ValueError(f"stale_after must be positive, got {stale_after}")
 
     unknown = {skip.pack_id for skip in report.skipped}
     packs = {
         pack_id: entry
         for pack_id, entry in previous.packs.items()
-        if pack_id in unknown
+        if pack_id in unknown and now - entry.last_seen_at <= stale_after
     }
     alerts: list[Alert] = []
     # A stable sort, so the Alerts come out in order whatever the report's.
@@ -217,11 +241,16 @@ def detect(
         ev_pct = result.ev.buyback_ev_pct
         entry = previous.packs.get(pack_id)
         if entry is not None and not _risen(entry, ev_pct, ev_step_pct):
-            packs[pack_id] = entry
+            packs[pack_id] = replace(entry, last_seen_at=now)
             continue
         alerts.append(_pack_alert(result, entry))
         packs[pack_id] = AlertedPack(ev_pct, now)
     return alerts, replace(previous, packs=packs)
+
+
+def _check_aware(now: datetime) -> None:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError(f"now must be timezone-aware, got {now.isoformat()}")
 
 
 def _risen(entry: AlertedPack, ev_pct: float, step: float) -> bool:
@@ -277,8 +306,7 @@ def _pack_alert(result: RankedPack, entry: AlertedPack | None) -> Alert:
     )
     if risk.high_variance:
         tags.append(_HIGH_VARIANCE_TAG)
-    message = _fit("\n".join(lines))
-    return Alert(kind, title, message, Priority.DEFAULT, tuple(tags), result)
+    return _alert(kind, title, "\n".join(lines), Priority.DEFAULT, tuple(tags), result)
 
 
 def _failed(outcome: HealthOutcome) -> Alert:
@@ -301,16 +329,35 @@ def _failed(outcome: HealthOutcome) -> Alert:
     # A long error is cut so that the line about backing off always fits.
     room = MAX_MESSAGE_BYTES - len(f"\n{_BACKING_OFF}".encode())
     message = f"{_fit(problem, room)}\n{_BACKING_OFF}"
-    return Alert(AlertKind.HEALTH_FAILED, title, message, Priority.HIGH, ("warning",))
+    return _alert(AlertKind.HEALTH_FAILED, title, message, Priority.HIGH, ("warning",))
 
 
 def _recovered() -> Alert:
-    return Alert(
+    return _alert(
         AlertKind.HEALTH_RECOVERED,
         "Watch Mode recovered",
         "Requests to Arena Club are working again.",
         Priority.DEFAULT,
         ("white_check_mark",),
+    )
+
+
+def _alert(
+    kind: AlertKind,
+    title: str,
+    message: str,
+    priority: Priority,
+    tags: tuple[str, ...],
+    result: RankedPack | None = None,
+) -> Alert:
+    """An Alert with its title and message cut to their limits."""
+    return Alert(
+        kind,
+        _fit(title, MAX_TITLE_BYTES),
+        _fit(message, MAX_MESSAGE_BYTES),
+        priority,
+        tags,
+        result,
     )
 
 
@@ -342,26 +389,45 @@ def _fit(text: str, limit: int = MAX_MESSAGE_BYTES) -> str:
 
 def load_state(directory: Path | None = None) -> AlertState:
     """Read the AlertState from `alerts.json` in `directory` (default: the
-    state directory). A missing file is the empty state; an unreadable or
-    corrupt one is logged and treated as the empty state."""
+    state directory). A missing file is the empty state, and so is one that
+    can't be read, which is logged.
+
+    A corrupt file, or one with an unknown version, is logged and renamed
+    aside to `alerts.json.corrupt-<UTC timestamp>` for debugging, so the next
+    save doesn't overwrite it.
+    """
     path = _state_path(directory)
     try:
-        text = path.read_text(encoding="utf-8")
+        data = path.read_bytes()
     except FileNotFoundError:
         return AlertState()
-    except (OSError, UnicodeDecodeError) as exc:
+    except OSError as exc:
         logger.warning("ignoring unreadable Alert state %s: %s", path, exc)
         return AlertState()
     try:
-        return _parse_state(json.loads(text))
+        return _parse_state(json.loads(data.decode("utf-8")))
     except (ValueError, TypeError, KeyError) as exc:
-        logger.warning("ignoring corrupt Alert state %s: %s", path, exc)
+        # UnicodeDecodeError and json.JSONDecodeError are ValueErrors.
+        logger.warning(
+            "ignoring corrupt Alert state %s (%s); %s", path, exc, _set_aside(path)
+        )
         return AlertState()
+
+
+def _set_aside(path: Path) -> str:
+    """Rename the corrupt file at `path` aside; say where it went."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    target = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        path.replace(target)
+    except OSError as exc:
+        return f"could not move it aside: {exc}"
+    return f"moved it to {target.name}"
 
 
 def save_state(state: AlertState, directory: Path | None = None) -> None:
     """Write `state` to `alerts.json` in `directory` (default: the state
-    directory), creating it if needed.
+    directory), creating it if needed, readable by the user only.
 
     The write is atomic: the state goes to a temp file beside it, which then
     replaces the old file, so a crash never leaves a half-written file.
@@ -369,7 +435,7 @@ def save_state(state: AlertState, directory: Path | None = None) -> None:
     """
     path = _state_path(directory)
     text = json.dumps(_state_json(state), indent=2, sort_keys=True) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -403,6 +469,7 @@ def _state_json(state: AlertState) -> dict[str, Any]:
             pack_id: {
                 "buyback_ev_pct": entry.buyback_ev_pct,
                 "alerted_at": entry.alerted_at.isoformat(),
+                "last_seen_at": entry.last_seen_at.isoformat(),
             }
             for pack_id, entry in state.packs.items()
         },
@@ -433,7 +500,19 @@ def _parse_entry(data: Any) -> AlertedPack:
         raise ValueError(f"buyback_ev_pct is not a number: {ev_pct!r}")
     if not math.isfinite(ev_pct):
         raise ValueError(f"buyback_ev_pct is not finite: {ev_pct!r}")
-    alerted_at = data["alerted_at"]
-    if not isinstance(alerted_at, str):
-        raise ValueError(f"alerted_at is not a string: {alerted_at!r}")
-    return AlertedPack(float(ev_pct), datetime.fromisoformat(alerted_at))
+    alerted_at = _parse_time(data["alerted_at"], "alerted_at")
+    last_seen_at = data.get("last_seen_at")
+    if last_seen_at is not None:
+        last_seen_at = _parse_time(last_seen_at, "last_seen_at")
+    return AlertedPack(float(ev_pct), alerted_at, last_seen_at)
+
+
+def _parse_time(text: Any, name: str) -> datetime:
+    """A timezone-aware ISO 8601 timestamp; a naive one is corrupt, since
+    `detect` compares it with an aware `now`."""
+    if not isinstance(text, str):
+        raise ValueError(f"{name} is not a string: {text!r}")
+    when = datetime.fromisoformat(text)
+    if when.utcoffset() is None:
+        raise ValueError(f"{name} has no time zone: {text!r}")
+    return when
